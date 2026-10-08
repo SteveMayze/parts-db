@@ -1,0 +1,148 @@
+{% extends "parts/base.html" %}
+{% block title %}Importvorschau{% endblock %}
+{% block content %}
+  <h1>Importvorschau</h1>
+  <p>
+    <strong>Lieferant:</strong> {{ preview.supplier }}<br>
+    <strong>Dokumente:</strong> {{ preview.summary.documents }}<br>
+    <strong>Zeilen:</strong> {{ preview.summary.lines }} (Treffer {{ preview.summary.matched }}, Neu {{ preview.summary.new }}, Prüfen {{ preview.summary.needs_review }})
+  </p>
+
+  {% if preview.failed_files %}
+    <div class="warning">
+      <strong>Nicht importierte Dateien:</strong>
+      <ul>
+        {% for failed in preview.failed_files %}
+          <li>{{ failed.file_name }}: {{ failed.error }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if preview.skipped_duplicates %}
+    <div class="warning">
+      <strong>Duplikate im selben Import (übersprungen):</strong>
+      <ul>
+        {% for item in preview.skipped_duplicates %}
+          <li>{{ item.file_name }} ({{ item.document_no }}): {{ item.reason }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if preview.new_type_names %}
+    <p><strong>Neue Typnamen in diesem Import:</strong> {{ preview.new_type_names|join:", " }}</p>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <label for="quantity_mode"><strong>Mengenmodus:</strong></label>
+    <select id="quantity_mode" name="quantity_mode">
+      {% for value, label in quantity_mode_choices %}
+        <option value="{{ value }}" {% if preview.quantity_mode == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+
+    {% if preview.failed_files %}
+      <p>
+        <label>
+          <input type="checkbox" name="continue_without_failed" value="yes">
+          Weiter ohne die fehlgeschlagenen Dateien
+        </label>
+      </p>
+    {% endif %}
+
+    <p>
+      <label>
+        <input type="checkbox" name="include_known_duplicates" value="yes">
+        Bereits früher importierte Belege trotzdem einbeziehen
+      </label>
+    </p>
+
+    {% for doc in preview.documents %}
+      <details open>
+        <summary>
+          <strong>{{ doc.file_name }}</strong> — {{ doc.invoice_no }} — {{ doc.invoice_date }} —
+          Treffer {{ doc.counts.matched }}, Neu {{ doc.counts.new }}, Prüfen {{ doc.counts.needs_review }}
+        </summary>
+
+        <p>
+          <strong>Dokument:</strong> {{ doc.invoice_no }}<br>
+          {% if doc.reference_note %}<strong>Zusatzreferenz:</strong> {{ doc.reference_note }}<br>{% endif %}
+          {% if doc.warning %}<strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}<br>{% endif %}
+          {% if doc.whg_note %}<small>{{ doc.whg_note }}</small><br>{% endif %}
+          {% if doc.duplicate_invoice %}
+            <span class="warning">Schon importiert am {{ doc.duplicate_imported_at }}</span><br>
+          {% endif %}
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Zeile</th>
+              <th>Artikel</th>
+              <th>Lieferant</th>
+              <th>Art.-Nr.</th>
+              <th>Menge</th>
+              <th>Preis</th>
+              <th>Typ (Vorschlag)</th>
+              <th>Wert (Vorschlag)</th>
+              <th>Verpackung (Vorschlag)</th>
+              <th>Status</th>
+              <th>Treffer</th>
+              <th>Überspringen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for line in doc.lines %}
+              <tr>
+                <td>{{ forloop.counter }}</td>
+                <td><input type="text" name="description::{{ line.field_prefix }}" value="{{ line.description }}" /></td>
+                <td><input type="text" name="supplier::{{ line.field_prefix }}" value="{{ line.supplier }}" /></td>
+                <td>
+                  <input type="text" name="supplier_part_no::{{ line.field_prefix }}" value="{{ line.supplier_part_no }}" />
+                  <input type="hidden" name="mf_part_no::{{ line.field_prefix }}" value="{{ line.mf_part_no|default:'' }}">
+                  <input type="hidden" name="currency::{{ line.field_prefix }}" value="{{ line.currency|default:'EUR' }}">
+                  <input type="hidden" name="unit_price::{{ line.field_prefix }}" value="{{ line.unit_price }}">
+                </td>
+                <td><input type="number" name="quantity::{{ line.field_prefix }}" value="{{ line.quantity }}" /></td>
+                <td>{{ line.unit_price }} {{ line.currency }}</td>
+                <td>
+                  <input type="text" name="part_type::{{ line.field_prefix }}" value="{{ line.part_type }}" />
+                  {% if line.part_type_suggested %}<small>Vorschlag: {{ line.part_type_suggested }}</small>{% endif %}
+                </td>
+                <td>
+                  <input type="text" name="value::{{ line.field_prefix }}" value="{{ line.value }}" />
+                  {% if line.value_suggested %}<small>Vorschlag: {{ line.value_suggested }}</small>{% endif %}
+                </td>
+                <td>
+                  <input type="text" name="packaging::{{ line.field_prefix }}" value="{{ line.packaging }}" />
+                  {% if line.packaging_suggested %}<small>Vorschlag: {{ line.packaging_suggested }}</small>{% endif %}
+                </td>
+                <td>{{ line.status_label }}</td>
+                <td>
+                  {% if line.part %}
+                    <select name="match::{{ line.field_prefix }}">
+                      <option value="{{ line.part.pk }}" selected>{{ line.part.label }}</option>
+                    </select>
+                  {% else %}
+                    <select name="match::{{ line.field_prefix }}">
+                      <option value="">Neu anlegen</option>
+                      {% for candidate in line.candidates %}
+                        <option value="{{ candidate.pk }}">{{ candidate.label }}</option>
+                      {% endfor %}
+                    </select>
+                  {% endif %}
+                </td>
+                <td><input type="checkbox" name="skip::{{ line.field_prefix }}"></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
+    {% endfor %}
+
+    <button type="submit">Import bestätigen</button>
+  </form>
+{% endblock %}

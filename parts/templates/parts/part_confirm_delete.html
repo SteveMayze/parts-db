@@ -1,0 +1,12 @@
+{% extends "parts/base.html" %}
+{% block title %}Bauteil löschen{% endblock %}
+{% block content %}
+  <h1>Bauteil löschen</h1>
+  <p>Soll „{{ object }}“ wirklich gelöscht werden?</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="button-danger">Löschen</button>
+    <a href="{% url 'parts:list' %}">Abbrechen</a>
+  </form>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "parts/base.html" %}
+{% block title %}{% if object %}Bauteil bearbeiten{% else %}Bauteil hinzufügen{% endif %}{% endblock %}
+{% block content %}
+  <h1>{% if object %}Bauteil bearbeiten{% else %}Bauteil hinzufügen{% endif %}</h1>
+
+  <p><a href="{% url 'parts:list' %}">Zurück zur Suche</a></p>
+
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Speichern</button>
+  </form>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "parts/base.html" %}
+{% block title %}Bauteile vervollständigen{% endblock %}
+{% block content %}
+  <h1>Bauteile vervollständigen</h1>
+  <p><a href="{% url 'parts:list' %}">Zurück zur Suche</a></p>
+
+  {% if candidates %}
+    <form method="post">
+      {% csrf_token %}
+      <p>
+        <label>
+          <input type="checkbox" id="select-all">
+          Alle auswählen
+        </label>
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Auswählen</th>
+            <th>Bauteil</th>
+            <th>Beschreibung</th>
+            <th>Typ (alt → neu)</th>
+            <th>Wert (alt → neu)</th>
+            <th>Verpackung (alt → neu)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in candidates %}
+            <tr>
+              <td><input type="checkbox" name="apply_{{ item.part.id }}" class="row-select"></td>
+              <td>#{{ item.part.id }}</td>
+              <td>{{ item.part.description }}</td>
+              <td>
+                <span>{{ item.part_type_old|default:"—" }}</span> →
+                <input type="text" name="part_type_{{ item.part.id }}" value="{{ item.part_type_new }}">
+              </td>
+              <td>
+                <span>{{ item.value_old|default:"—" }}</span> →
+                <input type="text" name="value_{{ item.part.id }}" value="{{ item.value_new }}">
+              </td>
+              <td>
+                <span>{{ item.packaging_old|default:"—" }}</span> →
+                <input type="text" name="packaging_{{ item.part.id }}" value="{{ item.packaging_new }}">
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit">Auswahl anwenden</button>
+    </form>
+    <script>
+      const selectAll = document.getElementById("select-all");
+      if (selectAll) {
+        selectAll.addEventListener("change", () => {
+          document.querySelectorAll(".row-select").forEach((checkbox) => {
+            checkbox.checked = selectAll.checked;
+          });
+        });
+      }
+    </script>
+  {% else %}
+    <p>Keine passenden Vorschläge gefunden.</p>
+  {% endif %}
+{% endblock %}

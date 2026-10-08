@@ -11,3 +11,5 @@ infra/inventory.local.ini
 samples/*
 !samples/.gitignore
 samples/
+inventory.ini
+

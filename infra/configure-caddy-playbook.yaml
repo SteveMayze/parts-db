@@ -1,0 +1,62 @@
+---
+- hosts: partsdb
+  gather_facts: false
+  vars:
+    caddy_mode: proxy
+    app_upstream: "127.0.0.1:8888"
+    caddy_host: "{{ django_allowed_host | default(inventory_hostname) }}"
+    caddyfile_path: /etc/caddy/Caddyfile
+
+  tasks:
+    - name: Ensure Caddy is installed
+      become: true
+      ansible.builtin.apt:
+        name: caddy
+        state: present
+        update_cache: true
+      when: caddy_mode == "proxy"
+
+    - name: Backup existing Caddyfile
+      become: true
+      ansible.builtin.copy:
+        src: "{{ caddyfile_path }}"
+        dest: "{{ caddyfile_path }}.bak-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+        remote_src: true
+        mode: "0644"
+      ignore_errors: true
+      when: caddy_mode == "proxy"
+
+    - name: Install Caddy config for parts-db
+      become: true
+      ansible.builtin.template:
+        src: templates/Caddyfile.parts-db.j2
+        dest: "{{ caddyfile_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: caddy_mode == "proxy"
+
+    - name: Enable and restart Caddy
+      become: true
+      ansible.builtin.systemd:
+        name: caddy
+        enabled: true
+        state: restarted
+      when: caddy_mode == "proxy"
+
+    - name: Disable Caddy service
+      become: true
+      ansible.builtin.systemd:
+        name: caddy
+        enabled: false
+        state: stopped
+      when: caddy_mode == "disable"
+
+    - name: Verify app through Caddy
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "https://{{ inventory_hostname }}/parts/"
+        method: GET
+        validate_certs: false
+        status_code: [200, 301, 302]
+      when: caddy_mode == "proxy"

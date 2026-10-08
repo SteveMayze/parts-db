@@ -1,0 +1,138 @@
+---
+- hosts: partsdb
+  gather_facts: true
+  vars:
+    app_name: parts-db
+    app_root: "/home/{{ ansible_user }}/{{ app_name }}"
+    app_src: "{{ app_root }}/src"
+    app_data_dir: "{{ app_root }}/data"
+    app_static_dir: "{{ app_root }}/staticfiles"
+    image_name: "{{ app_name }}:latest"
+    container_name: "{{ app_name }}-web"
+
+  pre_tasks:
+    - name: Ping target host
+      ansible.builtin.ping:
+
+    - name: Validate deployment secret key variable
+      ansible.builtin.assert:
+        that:
+          - django_secret_key is defined
+          - django_secret_key | length >= 32
+        fail_msg: "Set django_secret_key in infra/group_vars/all.yml before deploying."
+
+  tasks:
+    - name: Install Docker and Python Docker bindings
+      become: true
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - python3-docker
+          - rsync
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker service is enabled and started
+      become: true
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Ensure app directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ app_root }}"
+        - "{{ app_src }}"
+        - "{{ app_data_dir }}"
+        - "{{ app_static_dir }}"
+
+    - name: Ensure SQLite database file exists for bind mount
+      ansible.builtin.file:
+        path: "{{ app_data_dir }}/db.sqlite3"
+        state: touch
+        mode: "0644"
+
+    - name: Sync source code to target host
+      delegate_to: localhost
+      ansible.posix.synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ app_src }}/"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.venv"
+          - "--exclude=venv"
+          - "--exclude=__pycache__"
+          - "--exclude=db.sqlite3"
+          - "--exclude=infra/group_vars/all.yml"
+
+    - name: Build application image
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        source: build
+        force_source: true
+        build:
+          path: "{{ app_src }}"
+
+    - name: Run database migrations
+      community.docker.docker_container:
+        name: "{{ app_name }}-migrate"
+        image: "{{ image_name }}"
+        command: python manage.py migrate --noinput
+        detach: false
+        auto_remove: true
+        env:
+          DJANGO_DEBUG_FALSE: "1"
+          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+        volumes:
+          - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
+          - "{{ app_static_dir }}:/app/staticfiles"
+
+    - name: Collect static files
+      community.docker.docker_container:
+        name: "{{ app_name }}-collectstatic"
+        image: "{{ image_name }}"
+        command: python manage.py collectstatic --noinput
+        detach: false
+        auto_remove: true
+        env:
+          DJANGO_DEBUG_FALSE: "1"
+          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+        volumes:
+          - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
+          - "{{ app_static_dir }}:/app/staticfiles"
+
+    - name: Run application container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: started
+        recreate: true
+        restart_policy: unless-stopped
+        published_ports:
+          - "{{ app_port | default(8888) }}:8000"
+        env:
+          DJANGO_DEBUG_FALSE: "1"
+          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+        volumes:
+          - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
+          - "{{ app_static_dir }}:/app/staticfiles"
+
+  post_tasks:
+    - name: Verify /parts page responds with HTTP 200
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "http://{{ inventory_hostname }}:{{ app_port | default(8888) }}/parts/"
+        method: GET
+        status_code: 200
+      register: smoke_check
+      retries: 10
+      delay: 3
+      until: smoke_check.status == 200

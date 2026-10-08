@@ -1,0 +1,135 @@
+---
+- hosts: partsdb
+  gather_facts: true
+  vars:
+    app_name: parts-db
+    app_root: "/home/{{ ansible_user }}/{{ app_name }}"
+    app_src: "{{ app_root }}/src"
+    app_data_dir: "{{ app_root }}/data"
+    app_static_dir: "{{ app_root }}/staticfiles"
+    image_name: "localhost/{{ app_name }}:latest"
+    quadlet_file: "/etc/containers/systemd/{{ app_name }}.container"
+
+  pre_tasks:
+    - name: Ping target host
+      ansible.builtin.ping:
+
+    - name: Validate deployment secret key variable
+      ansible.builtin.assert:
+        that:
+          - django_secret_key is defined
+          - django_secret_key | length >= 32
+        fail_msg: "Set django_secret_key in infra/group_vars/all.yml before deploying."
+
+  tasks:
+    - name: Install Podman and rsync
+      become: true
+      ansible.builtin.apt:
+        name:
+          - podman
+          - rsync
+        state: present
+        update_cache: true
+
+    - name: Ensure app directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ app_root }}"
+        - "{{ app_src }}"
+        - "{{ app_data_dir }}"
+        - "{{ app_static_dir }}"
+
+    - name: Ensure SQLite database file exists for bind mount
+      ansible.builtin.file:
+        path: "{{ app_data_dir }}/db.sqlite3"
+        state: touch
+        mode: "0644"
+
+    - name: Sync source code to target host
+      delegate_to: localhost
+      ansible.posix.synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ app_src }}/"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.venv"
+          - "--exclude=venv"
+          - "--exclude=__pycache__"
+          - "--exclude=db.sqlite3"
+          - "--exclude=infra/group_vars/all.yml"
+
+    - name: Build application image with Podman
+      become: true
+      ansible.builtin.command:
+        cmd: podman build -t {{ image_name }} {{ app_src }}
+
+    - name: Run database migrations via Podman
+      become: true
+      ansible.builtin.command:
+        cmd: >
+          podman run --rm
+          -e DJANGO_DEBUG_FALSE=1
+          -e DJANGO_SECRET_KEY={{ django_secret_key | quote }}
+          -e DJANGO_ALLOWED_HOST={{ (django_allowed_host | default(inventory_hostname)) | quote }}
+          -v {{ app_data_dir }}/db.sqlite3:/app/db.sqlite3
+          -v {{ app_static_dir }}:/app/staticfiles
+          {{ image_name }}
+          python manage.py migrate --noinput
+
+    - name: Collect static files via Podman
+      become: true
+      ansible.builtin.command:
+        cmd: >
+          podman run --rm
+          -e DJANGO_DEBUG_FALSE=1
+          -e DJANGO_SECRET_KEY={{ django_secret_key | quote }}
+          -e DJANGO_ALLOWED_HOST={{ (django_allowed_host | default(inventory_hostname)) | quote }}
+          -v {{ app_data_dir }}/db.sqlite3:/app/db.sqlite3
+          -v {{ app_static_dir }}:/app/staticfiles
+          {{ image_name }}
+          python manage.py collectstatic --noinput
+
+    - name: Stop legacy Docker container if present
+      become: true
+      ansible.builtin.command:
+        cmd: docker rm -f parts-db-web
+      failed_when: false
+      changed_when: false
+      register: docker_stop
+
+    - name: Install Quadlet unit file
+      become: true
+      ansible.builtin.template:
+        src: templates/parts-db.container.j2
+        dest: "{{ quadlet_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload systemd for Quadlet changes
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and restart app service from Quadlet
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ app_name }}.service"
+        enabled: true
+        state: restarted
+
+  post_tasks:
+    - name: Verify /parts page responds with HTTP 200
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "http://{{ inventory_hostname }}:{{ app_port | default(8888) }}/parts/"
+        method: GET
+        status_code: 200
+      register: smoke_check
+      retries: 10
+      delay: 3
+      until: smoke_check.status == 200

@@ -1,0 +1,78 @@
+[
+  {
+    "model": "parts.part",
+    "pk": 1,
+    "fields": {
+      "part_type": "Resistor",
+      "value": "10k",
+      "packaging": "0805",
+      "description": "General purpose thick film resistor",
+      "manufacturer": "Yageo",
+      "mf_part_no": "RC0805JR-0710KL",
+      "quantity": 120,
+      "location_type": "folder",
+      "location_name": "Folder 2",
+      "position": "page 3, pocket 1",
+      "comment": "Approximate count",
+      "created_at": "2026-01-01T10:00:00Z",
+      "updated_at": "2026-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "parts.part",
+    "pk": 2,
+    "fields": {
+      "part_type": "Capacitor",
+      "value": "0.1uF",
+      "packaging": "0805",
+      "description": "Ceramic decoupling capacitor X7R 50V",
+      "manufacturer": "Murata",
+      "mf_part_no": "GRM21BR71H104KA01L",
+      "quantity": 300,
+      "location_type": "folder",
+      "location_name": "Folder 1",
+      "position": "page 1, pocket 5",
+      "comment": "",
+      "created_at": "2026-01-01T10:00:00Z",
+      "updated_at": "2026-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "parts.part",
+    "pk": 3,
+    "fields": {
+      "part_type": "IC",
+      "value": "STM32F103C8T6",
+      "packaging": "LQFP-48",
+      "description": "32-bit ARM microcontroller",
+      "manufacturer": "STMicroelectronics",
+      "mf_part_no": "STM32F103C8T6",
+      "quantity": 8,
+      "location_type": "storage_box",
+      "location_name": "Blue storage box",
+      "position": "slot B4",
+      "comment": "Some may be used pulls",
+      "created_at": "2026-01-01T10:00:00Z",
+      "updated_at": "2026-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "parts.part",
+    "pk": 4,
+    "fields": {
+      "part_type": "Transistor",
+      "value": "2N3904",
+      "packaging": "THT",
+      "description": "NPN transistor",
+      "manufacturer": "onsemi",
+      "mf_part_no": "",
+      "quantity": 60,
+      "location_type": "drawer",
+      "location_name": "Drawer unit A",
+      "position": "small drawer 7",
+      "comment": "",
+      "created_at": "2026-01-01T10:00:00Z",
+      "updated_at": "2026-01-01T10:00:00Z"
+    }
+  }
+]

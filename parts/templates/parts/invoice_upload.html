@@ -1,0 +1,21 @@
+{% extends "parts/base.html" %}
+{% block title %}Belege importieren{% endblock %}
+{% block content %}
+  <h1>Belege importieren</h1>
+  <p><a href="{% url 'parts:list' %}">Zurück zur Suche</a></p>
+  <p>Hinweis: Bitte pro Bestellung entweder die Eingangsbestätigung oder die Rechnung importieren, nicht beides.</p>
+
+  {% if form.non_field_errors %}
+    <ul class="errors">
+      {% for error in form.non_field_errors %}
+        <li>{{ error }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">PDFs analysieren</button>
+  </form>
+{% endblock %}

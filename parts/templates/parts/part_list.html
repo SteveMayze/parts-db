@@ -1,0 +1,74 @@
+{% extends "parts/base.html" %}
+{% block title %}Bauteile{% endblock %}
+{% block content %}
+  <h1>Bauteile</h1>
+
+  <p class="toolbar">
+    <a href="{% url 'parts:add' %}">Bauteil hinzufügen</a> |
+    <a href="{% url 'parts:complete' %}">Bauteile vervollständigen</a> |
+    <a href="{% url 'parts:import' %}">Belege importieren</a> |
+    <a href="/admin/">Verwaltung</a>
+  </p>
+
+  <form method="get">
+    <label for="q">Suche</label>
+    <input id="q" name="q" value="{{ current_q }}" placeholder="Typ, Wert, Verpackung, Beschreibung, Hersteller, Teilenummer">
+
+    <label for="part_type">Typ</label>
+    <select id="part_type" name="part_type">
+      <option value="">Alle</option>
+      {% for item in part_types %}
+        <option value="{{ item }}" {% if current_part_type == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="packaging">Verpackung</label>
+    <select id="packaging" name="packaging">
+      <option value="">Alle</option>
+      {% for item in packaging_options %}
+        <option value="{{ item }}" {% if current_packaging == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+
+    <button type="submit">Suchen</button>
+    <a href="{% url 'parts:list' %}">Zurücksetzen</a>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Typ</th>
+        <th>Wert</th>
+        <th>Verpackung</th>
+        <th>Beschreibung</th>
+        <th>Hersteller</th>
+        <th>Teilenummer</th>
+        <th>Menge</th>
+        <th>Lagerort</th>
+        <th>Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for part in parts %}
+        <tr>
+          <td>{{ part.part_type }}</td>
+          <td>{{ part.value }}</td>
+          <td>{{ part.packaging }}</td>
+          <td>{{ part.description }}</td>
+          <td>{{ part.manufacturer }}</td>
+          <td>{{ part.mf_part_no }}</td>
+          <td>{{ part.quantity }}</td>
+          <td>{{ part.full_location }}</td>
+          <td>
+            <a href="{% url 'parts:edit' part.pk %}">Bearbeiten</a>
+            <a href="{% url 'parts:delete' part.pk %}">Löschen</a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="9">Keine Bauteile gefunden.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

@@ -1,0 +1,4 @@
+Django>=5.2,<5.3
+gunicorn>=22,<24
+whitenoise>=6.8,<7
+pdfplumber>=0.11,<0.12

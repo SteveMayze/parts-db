@@ -1,0 +1,6 @@
+{{ caddy_host }} {
+    reverse_proxy /parts* {{ app_upstream }}
+    reverse_proxy /admin* {{ app_upstream }}
+    reverse_proxy /static* {{ app_upstream }}
+    redir / /parts/ 302
+}
