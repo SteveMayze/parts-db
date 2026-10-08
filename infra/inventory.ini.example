@@ -1,0 +1,2 @@
+[partsdb]
+your-host.example.com ansible_user=deploy-user

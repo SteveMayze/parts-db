@@ -1,0 +1,8 @@
+# Copy this file to infra/group_vars/all.yml and set real secret values.
+django_secret_key: "replace-with-long-random-secret"
+
+# By default we deploy to the inventory host name.
+django_allowed_host: "your-host.example.com"
+
+# Host port to expose the app on.
+app_port: 8888
