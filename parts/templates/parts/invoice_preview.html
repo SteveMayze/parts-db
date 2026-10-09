@@ -1,4 +1,5 @@
 {% extends "parts/base.html" %}
+{% load german %}
 {% block title %}Importvorschau{% endblock %}
 {% block content %}
   <h1>Importvorschau</h1>
@@ -92,7 +93,7 @@
     {% for doc in preview.documents %}
       <details open class="import-document">
         <summary>
-          <strong>{{ doc.file_name }}</strong> — {{ doc.invoice_no }} — {{ doc.invoice_date }} —
+          <strong>{{ doc.file_name }}</strong> — {{ doc.invoice_no }} — {{ doc.invoice_date|de_date }} —
           Treffer {{ doc.counts.matched }}, Neu {{ doc.counts.new }}, Prüfen {{ doc.counts.needs_review }}
         </summary>
 
@@ -101,13 +102,13 @@
           <div><dt>Lieferant</dt><dd>{{ doc.supplier }}</dd></div>
           <div><dt>Belegnummer</dt><dd>{{ doc.invoice_no }}</dd></div>
           {% if doc.layout %}<div><dt>Erkanntes Layout</dt><dd>{{ doc.layout }}</dd></div>{% endif %}
-          <div><dt>Belegdatum</dt><dd>{{ doc.invoice_date }}</dd></div>
+          <div><dt>Belegdatum</dt><dd>{{ doc.invoice_date|de_date }}</dd></div>
           <div>
             <dt>{% if doc.price_basis == "gross" %}Endbetrag (brutto){% else %}Belegsumme (netto){% endif %}</dt>
-            <dd>{{ doc.document_total }} EUR</dd>
+            <dd>{{ doc.document_total|eur2 }}</dd>
           </div>
           {% if doc.discount_total != "0.00" and doc.discount_total != "0" %}
-            <div><dt>Rabatt (brutto, nicht auf Zeilen verteilt)</dt><dd>{{ doc.discount_total }} EUR</dd></div>
+            <div><dt>Rabatt (brutto, nicht auf Zeilen verteilt)</dt><dd>{{ doc.discount_total|eur2 }}</dd></div>
           {% endif %}
           {% if doc.reference_note %}<div><dt>Zusatzreferenz</dt><dd>{{ doc.reference_note }}</dd></div>{% endif %}
         </dl>
@@ -124,7 +125,7 @@
         {% if doc.warning %}<p class="warning"><strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}</p>{% endif %}
         {% if doc.whg_note %}<p><small>{{ doc.whg_note }}</small></p>{% endif %}
         {% if doc.duplicate_invoice %}
-          <p class="warning">Schon importiert am {{ doc.duplicate_imported_at }}</p>
+          <p class="warning">Schon importiert am {{ doc.duplicate_imported_at|de_datetime }}</p>
         {% endif %}
 
         {% for line in doc.lines %}
@@ -135,9 +136,9 @@
               <label class="inline">Menge
                 <input type="number" min="0" class="narrow" name="quantity::{{ line.field_prefix }}" value="{{ line.edit_quantity|default:line.quantity }}">
               </label>
-              <span><strong>Nettopreis</strong> {{ line.unit_price }} {{ line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</span>
-              <span><strong>Bruttopreis</strong> {% if line.gross_unit_price %}{{ line.gross_unit_price }} {{ line.currency }}{% else %}-{% endif %}</span>
-              <span><strong>MwSt.</strong> {% if line.vat_rate %}{{ line.vat_rate }} %{% else %}-{% endif %}</span>
+              <span><strong>Nettopreis</strong> {{ line.unit_price|eur4:line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</span>
+              <span><strong>Bruttopreis</strong> {{ line.gross_unit_price|eur4:line.currency }}</span>
+              <span><strong>MwSt.</strong> {% if line.vat_rate %}{{ line.vat_rate|de_plain }} %{% else %}-{% endif %}</span>
               <span class="badge status-{{ line.status }}">{{ line.status_label }}</span>
             </div>
 

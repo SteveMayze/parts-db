@@ -16,6 +16,17 @@ from .tests_ui_language import ENGLISH_UI_WORDS, _extract_visible_text
 class PreviewLocationTests(TestCase):
     NAME = "Ordner 3"
 
+    def setUp(self):
+        import tempfile
+
+        from django.test import override_settings
+
+        media = tempfile.TemporaryDirectory()
+        self.addCleanup(media.cleanup)
+        override = override_settings(MEDIA_ROOT=media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+
     def preview(self, lines=None, count=1, **extra):
         docs = [
             invoice(lines or [{"description": f"Teil {i}", "no": f"20000{i}"}], number=f"960000000{i}")

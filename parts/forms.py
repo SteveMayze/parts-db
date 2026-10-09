@@ -43,9 +43,14 @@ class PartForm(forms.ModelForm):
             "position",
             "comment",
         ]
+        localized_fields = ("last_price",)
         widgets = {
-            "last_purchased": forms.DateInput(attrs={"type": "date"}),
+            "last_purchased": forms.DateInput(format="%d.%m.%Y", attrs={"placeholder": "TT.MM.JJJJ"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["last_purchased"].input_formats = ["%d.%m.%Y", "%Y-%m-%d"]
 
 
 class InvoiceUploadForm(forms.Form):

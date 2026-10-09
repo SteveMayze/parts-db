@@ -295,7 +295,7 @@ class SplitDeliveryBatchTests(TestCase):
         self.assertContains(response, "Teillieferung 2/2")
         self.assertContains(response, "separat geliefert: 68 × 747842")
         self.assertContains(response, "Rabatt (brutto")
-        self.assertContains(response, "-7.77")
+        self.assertContains(response, "-7,77")
         text = _extract_visible_text(response.content.decode("utf-8"))
         for word in ENGLISH_UI_WORDS:
             self.assertNotRegex(text, rf"\b{re.escape(word)}\b")

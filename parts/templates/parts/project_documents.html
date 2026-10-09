@@ -1,4 +1,5 @@
 {% extends "parts/base.html" %}
+{% load german %}
 {% block title %}Projektbelege{% endblock %}
 {% block content %}
   <h1>Projektbelege</h1>
@@ -34,8 +35,8 @@
       {% if selected_project %}{{ selected_project.name }}{% else %}Kunde: {{ selected_client }}{% endif %}
     </h2>
     <p>
-      <strong>Summe Netto:</strong> {{ net_total_sum }} EUR<br>
-      <strong>Summe Brutto:</strong> {{ gross_total_sum }} EUR<br>
+      <strong>Summe Netto:</strong> {{ net_total_sum|eur2 }}<br>
+      <strong>Summe Brutto:</strong> {{ gross_total_sum|eur2 }}<br>
       {% if net_total_sum and gross_total_sum %}
         <em>Hinweis: Es sind Netto- und Bruttozeilen gemischt; Summen sind getrennt ausgewiesen.</em>
       {% endif %}
@@ -59,21 +60,21 @@
       <tbody>
         {% for item in documents %}
           <tr>
-            <td>{{ item.document.document_date|default:"-" }}</td>
+            <td>{{ item.document.document_date|de_date }}</td>
             <td>{{ item.document.supplier.name }}</td>
             <td>{{ item.document.document_type }}</td>
             <td><a href="{% url 'parts:document_detail' item.document.pk %}">{{ item.document.document_number }}</a></td>
             <td>{{ item.document.paper_invoice_no|default:"-" }}</td>
             <td>{{ item.document.filing_location|default:"-" }}</td>
             <td>{% if item.document.paper_filed %}Ja{% else %}Nein{% endif %}</td>
-            <td>{{ item.project_subtotal }} {{ item.document.currency }}</td>
-            <td>{{ item.document.shipping_cost }} {{ item.document.currency }}</td>
+            <td>{{ item.project_subtotal|eur2:item.document.currency }}</td>
+            <td>{{ item.document.shipping_cost|eur2:item.document.currency }}</td>
             <td>
               {% if item.mixed_projects_hint %}
                 Enthält weitere oder ungetaggte Zeilen; Versand wird nicht automatisch verteilt.
               {% endif %}
               {% if item.document.discount_total %}
-                Beleg-Rabatt {{ item.document.discount_total }} {{ item.document.currency }} (brutto) ist in der Teilsumme nicht enthalten.
+                Beleg-Rabatt {{ item.document.discount_total|eur2:item.document.currency }} (brutto) ist in der Teilsumme nicht enthalten.
               {% endif %}
               {% if item.untagged_lines %}
                 {{ item.untagged_lines }} Zeilen ohne Projekt.
@@ -109,12 +110,12 @@
       <tbody>
         {% for line in line_items %}
           <tr>
-            <td>{{ line.document.document_date|default:"-" }}</td>
+            <td>{{ line.document.document_date|de_date }}</td>
             <td><a href="{% url 'parts:document_detail' line.document.pk %}">{{ line.document.document_number }}</a></td>
             <td>{{ line.description }}</td>
-            <td>{{ line.quantity }}</td>
-            <td>{{ line.unit_price }} {{ line.currency }}</td>
-            <td>{{ line.line_total }} {{ line.currency }}</td>
+            <td>{{ line.quantity|de_plain }}</td>
+            <td>{{ line.unit_price|eur4:line.currency }}</td>
+            <td>{{ line.line_total|eur2:line.currency }}</td>
             <td>{{ line.project.name|default:"-" }}</td>
           </tr>
         {% empty %}

@@ -1,4 +1,5 @@
 {% extends "parts/base.html" %}
+{% load german %}
 {% block title %}Kaufbeleg {{ document.document_number }}{% endblock %}
 {% block content %}
   <h1>Kaufbeleg {{ document.document_number }}</h1>
@@ -11,13 +12,13 @@
   <p>
     <strong>Lieferant:</strong> {{ document.supplier.name }}<br>
     <strong>Typ:</strong> {{ document.document_type }}<br>
-    <strong>Datum:</strong> {{ document.document_date|default:"-" }}<br>
+    <strong>Datum:</strong> {{ document.document_date|de_date }}<br>
     <strong>Auftragsnummer:</strong> {{ document.related_order_number|default:"-" }}<br>
     <strong>Papierbeleg-Nr.:</strong> {{ document.paper_invoice_no|default:"-" }}<br>
     <strong>Papier abgelegt:</strong> {% if document.paper_filed %}Ja{% else %}Nein{% endif %}<br>
     <strong>Ablageort:</strong> {{ document.filing_location|default:"-" }}<br>
-    <strong>Gesamt:</strong> {{ document.document_total }} {{ document.currency }}<br>
-    {% if document.discount_total %}<strong>Rabatt (Beleg, brutto):</strong> {{ document.discount_total }} {{ document.currency }}<br>{% endif %}
+    <strong>Gesamt:</strong> {{ document.document_total|eur2:document.currency }}<br>
+    {% if document.discount_total %}<strong>Rabatt (Beleg, brutto):</strong> {{ document.discount_total|eur2:document.currency }}<br>{% endif %}
     {% if document.notes %}<strong>Hinweise:</strong> {{ document.notes|linebreaksbr }}<br>{% endif %}
     <strong>PDF:</strong>
     {% if document.pdf_file %}
@@ -64,9 +65,9 @@
             <td>{{ line.position }}</td>
             <td>{{ line.description }}</td>
             <td>{{ line.supplier_part_no }}</td>
-            <td>{{ line.quantity }}</td>
-            <td>{{ line.unit_price }} {{ line.currency }} <small>({% if line.price_is_net %}netto{% else %}brutto{% endif %})</small></td>
-            <td>{{ line.line_total }} {{ line.currency }} <small>({% if line.price_is_net %}netto{% else %}brutto{% endif %})</small></td>
+            <td>{{ line.quantity|de_plain }}</td>
+            <td>{{ line.unit_price|eur4:line.currency }} <small>({% if line.price_is_net %}netto{% else %}brutto{% endif %})</small></td>
+            <td>{{ line.line_total|eur2:line.currency }} <small>({% if line.price_is_net %}netto{% else %}brutto{% endif %})</small></td>
             <td>
               {% if line.part %}
                 <a href="{% url 'parts:detail' line.part.pk %}">{{ line.part }}</a>

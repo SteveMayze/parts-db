@@ -99,7 +99,7 @@ class ConradGrossBasisTests(TestCase):
         import_batch(self.client, [LAYOUT_A_TEXT])
         self.client.post(reverse("parts:invoice_preview"), {"batch_project_id": str(project.pk)})
         response = self.client.get(reverse("parts:project_documents"), {"project": str(project.pk)})
-        self.assertContains(response, "11,4000")
+        self.assertContains(response, "11,40")
         self.assertEqual(response.context["gross_total_sum"], Decimal("11.4000"))
         self.assertEqual(response.context["net_total_sum"], Decimal("0.0000"))
 

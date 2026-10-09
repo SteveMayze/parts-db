@@ -1,4 +1,5 @@
 {% extends "parts/base.html" %}
+{% load german %}
 {% block title %}Bauteil {{ part }}{% endblock %}
 {% block content %}
   <h1>Bauteil: {{ part }}</h1>
@@ -31,11 +32,11 @@
     <tbody>
       {% for line in purchase_history %}
         <tr>
-          <td>{{ line.document.document_date|default:"-" }}</td>
+          <td>{{ line.document.document_date|de_date }}</td>
           <td>{{ line.document.supplier.name }}</td>
           <td><a href="{% url 'parts:document_detail' line.document.pk %}">{{ line.document.document_number }}</a></td>
-          <td>{{ line.quantity }}</td>
-          <td>{{ line.unit_price }} {{ line.currency }}</td>
+          <td>{{ line.quantity|de_plain }}</td>
+          <td>{{ line.unit_price|eur4:line.currency }}</td>
           <td>{{ line.project.name|default:"-" }}</td>
         </tr>
       {% empty %}
