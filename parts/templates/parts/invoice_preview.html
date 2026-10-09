@@ -80,7 +80,13 @@
 
         <p>
           <strong>Dokument:</strong> {{ doc.invoice_no }}<br>
+          {% if doc.layout %}<strong>Erkanntes Layout:</strong> {{ doc.layout }}<br>{% endif %}
           {% if doc.price_basis == "gross" %}<strong>Endbetrag (brutto):</strong> {{ doc.document_total }} EUR<br>{% endif %}
+          {% if doc.discount_total != "0.00" and doc.discount_total != "0" %}<strong>Rabatt (brutto, nicht auf Zeilen verteilt):</strong> {{ doc.discount_total }} EUR<br>{% endif %}
+          {% if doc.notes %}
+            <strong>Hinweise:</strong>
+            <ul>{% for note in doc.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+          {% endif %}
           {% if doc.reference_note %}<strong>Zusatzreferenz:</strong> {{ doc.reference_note }}<br>{% endif %}
           {% if doc.warning %}<strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}<br>{% endif %}
           {% if doc.whg_note %}<small>{{ doc.whg_note }}</small><br>{% endif %}

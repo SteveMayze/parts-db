@@ -144,6 +144,27 @@ Imported documents are tracked in `ImportedDocument` (unique supplier + document
 
 > Note: import either the order confirmation or the invoice for an order, not both.
 
+### Conrad specifics
+
+- Only documents titled `Rechnung` are accepted (credit notes, delivery notes, ... are rejected).
+- The layout is detected from markers and shown in the preview:
+  - **A** (Pos. / Art.-Nr. table, `Summe Nettowert`): newer invoices.
+  - **B** (Bestell-Nr. table, `NETTO` totals row): 2020 invoices, read by word positions.
+  - Unknown layout: the import stops and lists which markers were found and which are missing.
+  - A new layout needs one reader function and one entry in `_LAYOUTS` in `parsers/conrad.py`, plus a sample.
+- Conrad prints **gross** prices. The unit price is derived from `Gesamtpreis ÷ Menge` (4 decimals; handles
+  rounded prices and `Preis / 1.000 ST`). Purchase lines are stored as gross; `Part.last_price` is the net price,
+  derived with the VAT rate of the line's tax class (from the `StK. n: x% Umsatzsteuer` legend).
+- Discount rows (`Sonderrabatt`) are not parts and never change stock. The signed gross sum is stored in
+  `PurchaseDocument.discount_total`; it is not distributed over the lines or projects.
+- `Teillieferung n/m`, note rows and the blocks `Folgende Artikel werden separat geliefert / nachgeliefert`
+  are stored in the document notes. Rows in those blocks are never imported (that quantity is on another invoice).
+- Self-checks (shown as warnings in the preview, naming the file and the invoice number):
+  a) lines + discounts = Endbetrag, b) NETTO + USt = Endbetrag, c) NETTO × rate ≈ USt (0,01),
+  d) |Gesamtpreis ÷ Menge − printed Einzelpreis| ≤ 0,005, e) every tax class exists in the legend.
+- Real invoices go to `samples/conrad/` (gitignored). Tests using them are skipped when the folder is missing;
+  the other Conrad tests use synthetic PDFs generated with `reportlab` (`pip install -r requirements-dev.txt`).
+
 ### Reichelt specifics
 
 - Only the order-confirmation layout is supported.

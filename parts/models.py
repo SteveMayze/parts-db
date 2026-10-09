@@ -83,6 +83,7 @@ class PurchaseDocument(models.Model):
     related_order_number = models.CharField("Auftragsnummer", max_length=200, blank=True)
     currency = models.CharField("Währung", max_length=3, default="EUR", blank=True)
     shipping_cost = models.DecimalField("Versandkosten", max_digits=12, decimal_places=4, default=Decimal("0.00"), blank=True)
+    discount_total = models.DecimalField("Rabatt (Beleg, brutto)", max_digits=12, decimal_places=4, default=Decimal("0.00"), blank=True)
     document_total = models.DecimalField("Belegsumme", max_digits=12, decimal_places=4, default=Decimal("0.00"), blank=True)
     pdf_file = models.FileField(
         "PDF-Datei",

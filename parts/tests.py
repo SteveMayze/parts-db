@@ -484,13 +484,15 @@ class InvoiceImportTests(TestCase):
         sample = Path("samples/Conrad-Invoice.pdf")
         if not sample.exists():
             self.skipTest("Conrad sample file not available")
-        with pdfplumber.open(sample) as pdf:
-            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-        parsed = ConradInvoiceParser().parse_invoice_text(text)
+        parsed = ConradInvoiceParser().parse_pdf(sample.read_bytes(), filename=sample.name)
         self.assertEqual(parsed["supplier"], "Conrad Electronic SE")
         self.assertEqual(parsed["invoice_no"], "9732893499")
         self.assertEqual(parsed["invoice_date"].isoformat(), "2021-12-09")
         self.assertEqual(len(parsed["lines"]), 6)
+        self.assertEqual(parsed["layout"], "A")
+        self.assertEqual(parsed["gross_total"], Decimal("51.05"))
+        self.assertEqual(parsed["net_total"], Decimal("42.90"))
+        self.assertEqual(parsed["warnings"], [])
 
     def test_invoice_preview_matches_existing_part_and_warns_for_duplicate_invoice(self):
         existing = Part.objects.create(

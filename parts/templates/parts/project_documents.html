@@ -72,6 +72,9 @@
               {% if item.mixed_projects_hint %}
                 Enthält weitere oder ungetaggte Zeilen; Versand wird nicht automatisch verteilt.
               {% endif %}
+              {% if item.document.discount_total %}
+                Beleg-Rabatt {{ item.document.discount_total }} {{ item.document.currency }} (brutto) ist in der Teilsumme nicht enthalten.
+              {% endif %}
               {% if item.untagged_lines %}
                 {{ item.untagged_lines }} Zeilen ohne Projekt.
               {% endif %}

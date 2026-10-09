@@ -17,6 +17,8 @@
     <strong>Papier abgelegt:</strong> {% if document.paper_filed %}Ja{% else %}Nein{% endif %}<br>
     <strong>Ablageort:</strong> {{ document.filing_location|default:"-" }}<br>
     <strong>Gesamt:</strong> {{ document.document_total }} {{ document.currency }}<br>
+    {% if document.discount_total %}<strong>Rabatt (Beleg, brutto):</strong> {{ document.discount_total }} {{ document.currency }}<br>{% endif %}
+    {% if document.notes %}<strong>Hinweise:</strong> {{ document.notes|linebreaksbr }}<br>{% endif %}
     <strong>PDF:</strong>
     {% if document.pdf_file %}
       <a href="{% url 'parts:document_download' document.pk %}">Download</a>

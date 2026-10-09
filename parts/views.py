@@ -393,6 +393,9 @@ def build_invoice_preview(invoice_data):
         "duplicate_imported_at": duplicate_at,
         "document_type": invoice_data.get("document_type", ""),
         "price_basis": invoice_data.get("price_basis", "net"),
+        "layout": invoice_data.get("layout", ""),
+        "notes": [str(note) for note in invoice_data.get("notes", [])],
+        "discount_total": str(invoice_data.get("discount_total") or Decimal("0.00")),
         "document_total": str(
             invoice_data.get("document_total") or invoice_data.get("net_total") or invoice_data.get("gross_total") or Decimal("0.00")
         ),
@@ -1233,9 +1236,11 @@ def _create_purchase_document(doc, supplier):
         currency="EUR",
         shipping_cost=Decimal("0.0000"),
         document_total=Decimal(doc.get("document_total") or "0.00"),
+        discount_total=Decimal(doc.get("discount_total") or "0.00"),
         filing_location="",
         paper_invoice_no="",
-        notes=doc.get("warning", ""),
+        # Hinweise des Belegs (Teillieferung, separat geliefert, ...); Prüfwarnungen bleiben in der Vorschau.
+        notes="\n".join(doc["notes"]) if doc.get("notes") else doc.get("warning", ""),
     )
     temp_path = doc.get("pdf_temp_path", "")
     if temp_path:

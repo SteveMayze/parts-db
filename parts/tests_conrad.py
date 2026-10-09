@@ -28,10 +28,11 @@ Endbetrag 11,40EUR
 
 
 def import_batch(client, texts):
-    documents = [
-        {"file_name": f"beleg{i}.pdf", "invoice_data": ConradInvoiceParser().parse_invoice_text(text)}
-        for i, text in enumerate(texts)
-    ]
+    return import_parsed(client, [ConradInvoiceParser().parse_invoice_text(text) for text in texts])
+
+
+def import_parsed(client, parsed_documents):
+    documents = [{"file_name": f"beleg{i}.pdf", "invoice_data": parsed} for i, parsed in enumerate(parsed_documents)]
     docs, summary, skipped, new_types = _build_batch_preview(documents)
     session = client.session
     session["invoice_preview_batch"] = {
@@ -66,16 +67,17 @@ class ConradGrossBasisTests(TestCase):
         self.assertEqual(second["line_total_gross"], Decimal("5.90"))
 
     def test_check_compares_line_totals_with_gross_total_not_net(self):
-        tampered = LAYOUT_A_TEXT.replace("Summe Bruttowert 11,40", "Summe Bruttowert 11,41")
+        # Summe der Zeilen (11,40) stimmt mit dem Bruttobetrag überein, nicht mit dem Nettowert (9,58).
+        self.assertEqual(ConradInvoiceParser().parse_invoice_text(LAYOUT_A_TEXT)["warnings"], [])
+        tampered = LAYOUT_A_TEXT.replace("Endbetrag 11,40EUR", "Endbetrag 11,41EUR")
         parsed = ConradInvoiceParser().parse_invoice_text(tampered)
-        self.assertEqual(len(parsed["warnings"]), 1)
-        self.assertIn("9700000001", parsed["warnings"][0])
-        self.assertIn("Bruttosumme", parsed["warnings"][0])
+        self.assertTrue(all("9700000001" in warning for warning in parsed["warnings"]))
+        self.assertIn("Prüfung a", parsed["warnings"][0])
 
-    def test_unknown_tax_class_is_an_error(self):
+    def test_unknown_tax_class_is_a_visible_warning(self):
         broken = LAYOUT_A_TEXT.replace("StK 19: 19% Umsatzsteuer\n", "")
-        with self.assertRaisesRegex(ValueError, "Steuerklasse 19"):
-            ConradInvoiceParser().parse_invoice_text(broken)
+        parsed = ConradInvoiceParser().parse_invoice_text(broken)
+        self.assertTrue(any("Prüfung e" in warning and "9700000001" in warning for warning in parsed["warnings"]))
 
     def test_import_stores_gross_lines_and_net_part_price(self):
         docs = import_batch(self.client, [LAYOUT_A_TEXT])
