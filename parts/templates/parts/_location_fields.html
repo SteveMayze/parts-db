@@ -1,0 +1,14 @@
+<label>Lagerort-Typ
+  <select name="{{ type_field }}" {{ extra_attrs|safe }}>
+    <option value="">-</option>
+    {% for value, label in location_type_choices %}
+      <option value="{{ value }}" {% if type_value == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</label>
+<label>Lagerort
+  <input type="text" list="known-location-names" name="{{ name_field }}" value="{{ name_value }}" {{ extra_attrs|safe }}>
+</label>
+<label>Position (optional)
+  <input type="text" name="{{ position_field }}" value="{{ position_value }}" {{ extra_attrs|safe }}>
+</label>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import io
 import re
 import csv
@@ -370,6 +371,16 @@ def build_invoice_preview(invoice_data):
                 "value_suggested": str(suggestions["value"] or ""),
                 "packaging_suggested": str(suggestions["packaging"] or ""),
                 "project_id": "",
+                "edit_description": line_data.get("description", ""),
+                "edit_quantity": str(int(line_data.get("quantity", 0) or 0)),
+                "part_location": _describe_location(part) if part else "",
+                "part_has_location": bool(part and (part.location_type or part.location_name)),
+                "location_type": "",
+                "location_name": "",
+                "location_position": "",
+                "change_location": False,
+                "skip": False,
+                "selected_match": "",
             }
         )
 
@@ -1155,6 +1166,7 @@ def invoice_upload(request):
                     "created_at": timezone.now().isoformat(),
                     "quantity_mode": QUANTITY_MODE_ADD,
                     "project_id": "",
+                    "default_location": request.session.get("last_import_location", {}),
                     "supplier": documents[0]["supplier"] if documents else "",
                     "documents": documents,
                     "failed_files": failed_files,
@@ -1235,6 +1247,9 @@ def _create_new_part(
     part_type,
     value,
     packaging,
+    location_type="",
+    location_name="",
+    location_position="",
 ):
     initial_quantity = quantity if quantity_mode == QUANTITY_MODE_ADD else 0
     return Part.objects.create(
@@ -1251,9 +1266,9 @@ def _create_new_part(
         last_purchased=document_date,
         last_document_no=document_no,
         quantity=initial_quantity,
-        location_type="",
-        location_name="",
-        position="",
+        location_type=location_type,
+        location_name=location_name,
+        position=location_position,
         comment="Per Belegimport angelegt",
     )
 
@@ -1280,13 +1295,131 @@ def _create_purchase_document(doc, supplier):
         if source.exists():
             with source.open("rb") as handle:
                 purchase_document.pdf_file.save(doc.get("pdf_original_name", source.name), handle, save=True)
-            source.unlink()
     return purchase_document
+
+
+@dataclass
+class _Location:
+    type: str = ""
+    name: str = ""
+    position: str = ""
+
+    @property
+    def given(self) -> bool:
+        return bool(self.type or self.name)
+
+
+def _clean_text(value) -> str:
+    return " ".join(normalise_unicode_text(value).split())
+
+
+def _parse_location_type(raw) -> str:
+    cleaned = _clean_text(raw)
+    if not cleaned:
+        return ""
+    key = canonicalise_match_value(cleaned)
+    for value, label in Part.LocationType.choices:
+        if key in {canonicalise_match_value(value), canonicalise_match_value(label)}:
+            return value
+    valid = ", ".join(f"{value} ({label})" for value, label in Part.LocationType.choices)
+    raise ValueError(f"Unbekannter Lagerort-Typ '{cleaned}'. Gültig: {valid}.")
+
+
+def _read_location(post, type_key, name_key, position_key) -> tuple[str, str, str]:
+    return post.get(type_key, ""), post.get(name_key, ""), post.get(position_key, "")
+
+
+def _normalise_location(raw, known_names, notes) -> _Location:
+    location_type = _parse_location_type(raw[0])
+    name = _clean_text(raw[1])
+    position = _clean_text(raw[2])
+    if len(name) > 200 or len(position) > 200:
+        raise ValueError("Lagerort und Position dürfen höchstens 200 Zeichen lang sein.")
+    if name:
+        spelled = _reuse_spelling(name, known_names)
+        if spelled != name:
+            notes.append(f"Lagerort '{name}' wurde als vorhandene Schreibweise '{spelled}' übernommen.")
+        name = spelled
+    return _Location(location_type, name, position)
+
+
+def _same_text(left: str, right: str) -> bool:
+    return canonicalise_match_value(_clean_text(left)) == canonicalise_match_value(_clean_text(right))
+
+
+def _location_relation(part, location: _Location) -> str:
+    """'fill' (part has no location), 'same' or 'differs'."""
+    if not (part.location_type or part.location_name):
+        return "fill"
+    same = (
+        (not location.type or location.type == part.location_type)
+        and (not location.name or _same_text(location.name, part.location_name))
+        and (not location.position or _same_text(location.position, part.position))
+    )
+    return "same" if same else "differs"
+
+
+def _set_part_location(part, location: _Location, known_names) -> None:
+    changed = []
+    for field, value in (("location_type", location.type), ("location_name", location.name), ("position", location.position)):
+        if value and getattr(part, field) != value:
+            setattr(part, field, value)
+            changed.append(field)
+    if changed:
+        part.save(update_fields=changed + ["updated_at"])
+    if location.name and not any(_same_text(location.name, known) for known in known_names):
+        known_names.append(location.name)
+
+
+def _describe_location(part) -> str:
+    return part.full_location if (part.location_type or part.location_name) else ""
+
+
+class _ConfirmFailed(Exception):
+    def __init__(self, errors):
+        super().__init__("; ".join(errors))
+        self.errors = errors
+
+
+def _overlay_post(payload, post):
+    """Carry the values typed in the preview over, so a rejected confirm does not lose them."""
+    mode = post.get("quantity_mode", payload.get("quantity_mode", QUANTITY_MODE_ADD))
+    payload["quantity_mode"] = mode if mode in {QUANTITY_MODE_ADD, QUANTITY_MODE_KEEP} else QUANTITY_MODE_ADD
+    payload["project_id"] = post.get("batch_project_id", payload.get("project_id", "")).strip()
+    payload["default_location"] = dict(
+        zip(("type", "name", "position"), _read_location(post, "batch_location_type", "batch_location_name", "batch_location_position"))
+    )
+    for doc in payload.get("documents", []):
+        doc_id = doc["document_id"]
+        doc["default_location"] = dict(
+            zip(
+                ("type", "name", "position"),
+                _read_location(post, f"doc_location_type::{doc_id}", f"doc_location_name::{doc_id}", f"doc_location_position::{doc_id}"),
+            )
+        )
+        for line in doc.get("lines", []):
+            prefix = f"{doc_id}::{line['index']}"
+            line["edit_quantity"] = post.get(f"quantity::{prefix}", str(line["quantity"]))
+            line["edit_description"] = post.get(f"description::{prefix}", line.get("edit_description", line["description"]))
+            for field in ("part_type", "value", "packaging"):
+                line[field] = post.get(f"{field}::{prefix}", line.get(field, ""))
+            line["project_id"] = post.get(f"project::{prefix}", "")
+            line["location_type"] = post.get(f"location_type::{prefix}", "")
+            line["location_name"] = post.get(f"location_name::{prefix}", "")
+            line["location_position"] = post.get(f"location_position::{prefix}", "")
+            line["change_location"] = post.get(f"change_location::{prefix}") == "on"
+            line["skip"] = post.get(f"skip::{prefix}") == "on"
+            line["selected_match"] = post.get(f"match::{prefix}", "")
+    return payload
 
 
 def _preview_context(payload):
     existing = _existing_classification_values()
     return {
+        "location_type_choices": Part.LocationType.choices,
+        "known_location_names": sorted(
+            Part.objects.exclude(location_name="").values_list("location_name", flat=True).distinct(), key=str.casefold
+        ),
         "preview": payload,
         "quantity_mode_choices": [
             (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
@@ -1322,162 +1455,257 @@ def invoice_preview(request):
         include_known_duplicates = request.POST.get("include_known_duplicates") == "yes"
         documents = payload.get("documents", [])
         resolved_parts_by_key = {}
+        errors: list[str] = []
+        notes: list[str] = []
+        known_location_names = list(
+            Part.objects.exclude(location_name="").values_list("location_name", flat=True).distinct()
+        )
+        batch_raw = _read_location(request.POST, "batch_location_type", "batch_location_name", "batch_location_position")
+        created_documents = []
+        temp_files = []
+        last_location = None
 
-        with transaction.atomic():
-            for doc in documents:
-                supplier = doc.get("supplier", "")
-                document_no = doc.get("invoice_no", "")
-                document_date = None
-                if doc.get("invoice_date"):
-                    try:
-                        document_date = datetime.strptime(doc["invoice_date"], "%Y-%m-%d").date()
-                    except ValueError:
-                        document_date = None
-                already_imported = ImportedDocument.objects.filter(
-                    supplier__iexact=supplier,
-                    document_no__iexact=document_no,
-                ).exists()
+        try:
+            with transaction.atomic():
+                last_location = _confirm_documents(
+                    request, documents, payload, quantity_mode, batch_project_id, include_known_duplicates,
+                    existing_types, resolved_parts_by_key, known_location_names, batch_raw,
+                    errors, notes, created_documents, temp_files,
+                )
+                if errors:
+                    raise _ConfirmFailed(errors)
+        except _ConfirmFailed as failure:
+            _discard_created_files(created_documents)
+            for error in failure.errors:
+                messages.error(request, error)
+            request.session["invoice_preview_batch"] = _overlay_post(payload, request.POST)
+            return render(request, "parts/invoice_preview.html", _preview_context(request.session["invoice_preview_batch"]))
+        except Exception:
+            _discard_created_files(created_documents)
+            raise
 
-                supplier_obj, _supplier_created = Supplier.objects.get_or_create(name=supplier)
-                existing_purchase_document = PurchaseDocument.objects.filter(
-                    supplier=supplier_obj,
-                    document_type=_storage_document_type(doc.get("document_type")),
-                    document_number=document_no,
-                ).first()
-
-                if already_imported and not include_known_duplicates and existing_purchase_document is not None:
-                    temp_path = doc.get("pdf_temp_path", "")
-                    if temp_path:
-                        source = Path(temp_path)
-                        if source.exists():
-                            source.unlink()
-                    continue
-
-                purchase_document = existing_purchase_document
-                if purchase_document is None:
-                    purchase_document = _create_purchase_document(doc, supplier_obj)
-                write_purchase_lines = purchase_document.lines.count() == 0
-
-                line_count = 0
-                for line in doc.get("lines", []):
-                    index = line["index"]
-                    field_prefix = f"{doc['document_id']}::{index}"
-                    if request.POST.get(f"skip::{field_prefix}") == "on":
-                        continue
-
-                    selected_match = request.POST.get(f"match::{field_prefix}")
-                    quantity = int(request.POST.get(f"quantity::{field_prefix}", line["quantity"]) or 0)
-                    unit_price = Decimal(request.POST.get(f"unit_price::{field_prefix}", line["unit_price"]) or "0")
-                    line_supplier = (line.get("supplier") or supplier).strip()
-                    supplier_part_no = request.POST.get(f"supplier_part_no::{field_prefix}", line["supplier_part_no"]).strip()
-                    description = request.POST.get(f"description::{field_prefix}", line["description"]).strip()
-                    mf_part_no = (request.POST.get(f"mf_part_no::{field_prefix}", line["mf_part_no"]) or "").strip()
-                    currency = request.POST.get(f"currency::{field_prefix}", line["currency"]).strip() or "EUR"
-                    part_type = request.POST.get(f"part_type::{field_prefix}", line.get("part_type", "")).strip()
-                    value = request.POST.get(f"value::{field_prefix}", line.get("value", "")).strip()
-                    packaging = request.POST.get(f"packaging::{field_prefix}", line.get("packaging", "")).strip()
-                    line_project = _resolve_project_selection(
-                        request.POST.get(f"project::{field_prefix}", ""),
-                        fallback=_resolve_project_selection(batch_project_id, fallback=None),
-                    )
-
-                    key = (line_supplier.casefold(), supplier_part_no.casefold())
-                    if selected_match:
-                        part = Part.objects.get(pk=selected_match)
-                    elif supplier_part_no and key in resolved_parts_by_key:
-                        part = resolved_parts_by_key[key]
-                    else:
-                        part = Part.objects.filter(
-                            supplier__iexact=line_supplier,
-                            supplier_part_no__iexact=supplier_part_no,
-                        ).first()
-
-                    if part is not None:
-                        _apply_line_to_part(
-                            part=part,
-                            quantity=quantity,
-                            unit_price=unit_price,
-                            supplier=line_supplier,
-                            supplier_part_no=supplier_part_no,
-                            description=description,
-                            mf_part_no=mf_part_no,
-                            currency=currency,
-                            document_date=document_date,
-                            document_no=document_no,
-                            quantity_mode=quantity_mode,
-                        )
-                        _correct_part_classification(part, part_type, value, packaging, existing_types)
-                    else:
-                        part = _create_new_part(
-                            quantity=quantity,
-                            unit_price=unit_price,
-                            supplier=line_supplier,
-                            supplier_part_no=supplier_part_no,
-                            description=description,
-                            mf_part_no=mf_part_no,
-                            currency=currency,
-                            document_date=document_date,
-                            document_no=document_no,
-                            quantity_mode=quantity_mode,
-                            part_type=_reuse_spelling(part_type, existing_types["part_type"]),
-                            value=value,
-                            packaging=_reuse_spelling(packaging, existing_types["packaging"]),
-                        )
-                    if supplier_part_no:
-                        resolved_parts_by_key[key] = part
-
-                    if write_purchase_lines:
-                        price_is_gross = doc.get("price_basis") == "gross" and bool(line.get("gross_unit_price"))
-                        if price_is_gross:
-                            # Gespeichert wird der Bruttopreis des Belegs; Part.last_price bleibt netto.
-                            stored_unit_price = Decimal(line["gross_unit_price"])
-                            printed_total = Decimal(line["line_total_gross"]) if line.get("line_total_gross") else None
-                            if printed_total is not None and quantity == line["quantity"]:
-                                line_total = printed_total
-                            else:
-                                line_total = (Decimal(quantity) * stored_unit_price).quantize(Decimal("0.0001"))
-                        else:
-                            stored_unit_price = unit_price
-                            line_total = (Decimal(quantity) * unit_price).quantize(Decimal("0.0001"))
-                        PurchaseLine.objects.create(
-                            document=purchase_document,
-                            position=str(index + 1),
-                            supplier_part_no=supplier_part_no,
-                            description=line["description"],
-                            manufacturer_part_no=mf_part_no,
-                            quantity=Decimal(quantity),
-                            unit_price=stored_unit_price,
-                            line_total=line_total,
-                            currency=currency,
-                            price_is_net=not price_is_gross,
-                            price_is_derived=price_is_gross or (doc.get("document_type") == "order_confirmation"),
-                            part=part,
-                            project=line_project,
-                            notes="",
-                        )
-                    line_count += 1
-
-                if not already_imported:
-                    ImportedDocument.objects.create(
-                        supplier=supplier,
-                        document_no=document_no,
-                        document_date=document_date,
-                        document_type=doc.get("document_type", ""),
-                        original_filename=doc.get("file_name", ""),
-                        line_count=line_count,
-                    )
-
-                temp_path = doc.get("pdf_temp_path", "")
-                if temp_path:
-                    source = Path(temp_path)
-                    if source.exists():
-                        source.unlink()
-
+        for source in temp_files:
+            if source.exists():
+                source.unlink()
         request.session.pop("invoice_preview_batch", None)
+        chosen = last_location or _normalise_location(batch_raw, known_location_names, [])
+        if chosen.given:
+            request.session["last_import_location"] = {"type": chosen.type, "name": chosen.name, "position": chosen.position}
+        for note in notes:
+            messages.info(request, note)
         messages.success(request, "Import abgeschlossen.")
         return redirect("parts:list")
 
     return render(request, "parts/invoice_preview.html", _preview_context(payload))
+
+
+def _discard_created_files(created_documents):
+    for document in created_documents:
+        if document.pdf_file:
+            document.pdf_file.storage.delete(document.pdf_file.name)
+
+
+def _confirm_documents(
+    request, documents, payload, quantity_mode, batch_project_id, include_known_duplicates, existing_types,
+    resolved_parts_by_key, known_location_names, batch_raw, errors, notes, created_documents, temp_files,
+):
+    """Write parts, documents and lines. Runs inside one transaction; problems are collected in ``errors``."""
+    last_location = None
+    try:
+        batch_location = _normalise_location(batch_raw, known_location_names, [])
+    except ValueError as exc:
+        errors.append(f"Lagerort für alle Zeilen: {exc}")
+        batch_location = _Location()
+
+    for doc in documents:
+        supplier = doc.get("supplier", "")
+        document_no = doc.get("invoice_no", "")
+        document_date = None
+        if doc.get("invoice_date"):
+            try:
+                document_date = datetime.strptime(doc["invoice_date"], "%Y-%m-%d").date()
+            except ValueError:
+                document_date = None
+        already_imported = ImportedDocument.objects.filter(
+            supplier__iexact=supplier,
+            document_no__iexact=document_no,
+        ).exists()
+
+        supplier_obj, _supplier_created = Supplier.objects.get_or_create(name=supplier)
+        existing_purchase_document = PurchaseDocument.objects.filter(
+            supplier=supplier_obj,
+            document_type=_storage_document_type(doc.get("document_type")),
+            document_number=document_no,
+        ).first()
+
+        temp_path = doc.get("pdf_temp_path", "")
+        if temp_path:
+            temp_files.append(Path(temp_path))
+
+        if already_imported and not include_known_duplicates and existing_purchase_document is not None:
+            continue
+
+        purchase_document = existing_purchase_document
+        if purchase_document is None:
+            purchase_document = _create_purchase_document(doc, supplier_obj)
+            created_documents.append(purchase_document)
+        write_purchase_lines = purchase_document.lines.count() == 0
+
+        doc_id = doc["document_id"]
+        doc_label = doc.get("file_name") or document_no
+        try:
+            doc_location = _normalise_location(
+                _read_location(request.POST, f"doc_location_type::{doc_id}", f"doc_location_name::{doc_id}", f"doc_location_position::{doc_id}"),
+                known_location_names,
+                [],
+            )
+        except ValueError as exc:
+            errors.append(f"{doc_label}: Lagerort für alle Zeilen ohne Lagerort: {exc}")
+            doc_location = _Location()
+
+        line_count = 0
+        for line in doc.get("lines", []):
+            index = line["index"]
+            field_prefix = f"{doc_id}::{index}"
+            if request.POST.get(f"skip::{field_prefix}") == "on":
+                continue
+            line_label = f"{doc_label}, Zeile {index + 1}"
+
+            selected_match = request.POST.get(f"match::{field_prefix}")
+            quantity = int(request.POST.get(f"quantity::{field_prefix}", line["quantity"]) or 0)
+            unit_price = Decimal(line["unit_price"] or "0")
+            line_supplier = (line.get("supplier") or supplier).strip()
+            supplier_part_no = line["supplier_part_no"].strip()
+            description = request.POST.get(f"description::{field_prefix}", line["description"]).strip()
+            mf_part_no = (line["mf_part_no"] or "").strip()
+            currency = (line["currency"] or "").strip() or "EUR"
+            part_type = request.POST.get(f"part_type::{field_prefix}", line.get("part_type", "")).strip()
+            value = request.POST.get(f"value::{field_prefix}", line.get("value", "")).strip()
+            packaging = request.POST.get(f"packaging::{field_prefix}", line.get("packaging", "")).strip()
+            line_project = _resolve_project_selection(
+                request.POST.get(f"project::{field_prefix}", ""),
+                fallback=_resolve_project_selection(batch_project_id, fallback=None),
+            )
+
+            own_raw = _read_location(
+                request.POST, f"location_type::{field_prefix}", f"location_name::{field_prefix}", f"location_position::{field_prefix}"
+            )
+            from_default = False
+            try:
+                location = _normalise_location(own_raw, known_location_names, notes)
+            except ValueError as exc:
+                errors.append(f"{line_label}: {exc}")
+                location = _Location()
+            if not location.given:
+                location = doc_location if doc_location.given else batch_location
+                from_default = location.given
+            change_location = request.POST.get(f"change_location::{field_prefix}") == "on"
+
+            key = (line_supplier.casefold(), supplier_part_no.casefold())
+            if selected_match:
+                part = Part.objects.get(pk=selected_match)
+            elif supplier_part_no and key in resolved_parts_by_key:
+                part = resolved_parts_by_key[key]
+            else:
+                part = Part.objects.filter(
+                    supplier__iexact=line_supplier,
+                    supplier_part_no__iexact=supplier_part_no,
+                ).first()
+
+            if part is not None:
+                _apply_line_to_part(
+                    part=part,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    supplier=line_supplier,
+                    supplier_part_no=supplier_part_no,
+                    description=description,
+                    mf_part_no=mf_part_no,
+                    currency=currency,
+                    document_date=document_date,
+                    document_no=document_no,
+                    quantity_mode=quantity_mode,
+                )
+                _correct_part_classification(part, part_type, value, packaging, existing_types)
+                if location.given:
+                    relation = _location_relation(part, location)
+                    if relation == "fill" or (relation == "differs" and not from_default and change_location):
+                        _set_part_location(part, location, known_location_names)
+                        last_location = location
+                    elif relation == "differs" and not from_default:
+                        errors.append(
+                            f"{line_label}: Bauteil liegt bereits in '{_describe_location(part)}'. "
+                            "Zum Ändern bitte 'Lagerort ändern' ankreuzen oder den Lagerort leeren."
+                        )
+            else:
+                part = _create_new_part(
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    supplier=line_supplier,
+                    supplier_part_no=supplier_part_no,
+                    description=description,
+                    mf_part_no=mf_part_no,
+                    currency=currency,
+                    document_date=document_date,
+                    document_no=document_no,
+                    quantity_mode=quantity_mode,
+                    part_type=_reuse_spelling(part_type, existing_types["part_type"]),
+                    value=value,
+                    packaging=_reuse_spelling(packaging, existing_types["packaging"]),
+                    location_type=location.type,
+                    location_name=location.name,
+                    location_position=location.position,
+                )
+                if location.given:
+                    last_location = location
+                    if location.name and not any(_same_text(location.name, known) for known in known_location_names):
+                        known_location_names.append(location.name)
+            if supplier_part_no:
+                resolved_parts_by_key[key] = part
+
+            if write_purchase_lines:
+                price_is_gross = doc.get("price_basis") == "gross" and bool(line.get("gross_unit_price"))
+                if price_is_gross:
+                    # Gespeichert wird der Bruttopreis des Belegs; Part.last_price bleibt netto.
+                    stored_unit_price = Decimal(line["gross_unit_price"])
+                    printed_total = Decimal(line["line_total_gross"]) if line.get("line_total_gross") else None
+                    if printed_total is not None and quantity == line["quantity"]:
+                        line_total = printed_total
+                    else:
+                        line_total = (Decimal(quantity) * stored_unit_price).quantize(Decimal("0.0001"))
+                else:
+                    stored_unit_price = unit_price
+                    line_total = (Decimal(quantity) * unit_price).quantize(Decimal("0.0001"))
+                PurchaseLine.objects.create(
+                    document=purchase_document,
+                    position=str(index + 1),
+                    supplier_part_no=supplier_part_no,
+                    description=line["description"],
+                    manufacturer_part_no=mf_part_no,
+                    quantity=Decimal(quantity),
+                    unit_price=stored_unit_price,
+                    line_total=line_total,
+                    currency=currency,
+                    price_is_net=not price_is_gross,
+                    price_is_derived=price_is_gross or (doc.get("document_type") == "order_confirmation"),
+                    part=part,
+                    project=line_project,
+                    notes="",
+                )
+            line_count += 1
+
+        if not already_imported:
+            ImportedDocument.objects.create(
+                supplier=supplier,
+                document_no=document_no,
+                document_date=document_date,
+                document_type=doc.get("document_type", ""),
+                original_filename=doc.get("file_name", ""),
+                line_count=line_count,
+            )
+    return last_location
+
+
 
 
 def parts_complete_preview(request):

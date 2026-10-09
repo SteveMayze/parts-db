@@ -38,6 +38,7 @@
   {% endif %}
 
   <datalist id="known-part-types">{% for name in known_part_types %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+  <datalist id="known-location-names">{% for name in known_location_names %}<option value="{{ name }}"></option>{% endfor %}</datalist>
   <datalist id="known-packagings">{% for name in known_packagings %}<option value="{{ name }}"></option>{% endfor %}</datalist>
 
   <form method="post">
@@ -63,6 +64,14 @@
       </label>
       <a href="{{ project_new_link }}">Neues Projekt …</a>
     </div>
+
+    <fieldset class="location-default" data-default-scope="batch">
+      <legend>Lagerort für alle Zeilen ohne Lagerort</legend>
+      <div class="line-fields">
+        {% include "parts/_location_fields.html" with type_field="batch_location_type" name_field="batch_location_name" position_field="batch_location_position" type_value=preview.default_location.type name_value=preview.default_location.name position_value=preview.default_location.position extra_attrs='data-default="batch"' %}
+      </div>
+      <small>Gilt für neue Bauteile und für vorhandene Bauteile ohne Lagerort. Der zuletzt verwendete Lagerort wird vorgeschlagen.</small>
+    </fieldset>
 
     {% if preview.failed_files %}
       <p>
@@ -102,6 +111,12 @@
           {% endif %}
           {% if doc.reference_note %}<div><dt>Zusatzreferenz</dt><dd>{{ doc.reference_note }}</dd></div>{% endif %}
         </dl>
+        <fieldset class="location-default" data-default-scope="doc">
+          <legend>Lagerort für alle Zeilen dieses Belegs ohne Lagerort</legend>
+          <div class="line-fields">
+            {% include "parts/_location_fields.html" with type_field="doc_location_type::"|add:doc.document_id name_field="doc_location_name::"|add:doc.document_id position_field="doc_location_position::"|add:doc.document_id type_value=doc.default_location.type name_value=doc.default_location.name position_value=doc.default_location.position extra_attrs='data-default="doc"' %}
+          </div>
+        </fieldset>
         {% if doc.notes %}
           <p><strong>Hinweise:</strong></p>
           <ul>{% for note in doc.notes %}<li>{{ note }}</li>{% endfor %}</ul>
@@ -113,12 +128,12 @@
         {% endif %}
 
         {% for line in doc.lines %}
-          <section class="import-line status-{{ line.status }}">
+          <section class="import-line status-{{ line.status }}" data-line>
             <div class="line-facts">
               <span><strong>Zeile</strong> {{ forloop.counter }}</span>
               <span><strong>Art.-Nr.</strong> {{ line.supplier_part_no }}</span>
               <label class="inline">Menge
-                <input type="number" min="0" class="narrow" name="quantity::{{ line.field_prefix }}" value="{{ line.quantity }}">
+                <input type="number" min="0" class="narrow" name="quantity::{{ line.field_prefix }}" value="{{ line.edit_quantity|default:line.quantity }}">
               </label>
               <span><strong>Nettopreis</strong> {{ line.unit_price }} {{ line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</span>
               <span><strong>Bruttopreis</strong> {% if line.gross_unit_price %}{{ line.gross_unit_price }} {{ line.currency }}{% else %}-{% endif %}</span>
@@ -128,7 +143,7 @@
 
             <div class="line-description">
               <label>Beschreibung (wie gedruckt; bearbeitet nur für neue Bauteile)
-                <textarea name="description::{{ line.field_prefix }}" rows="2" data-autogrow>{{ line.description }}</textarea>
+                <textarea name="description::{{ line.field_prefix }}" rows="2" data-autogrow>{{ line.edit_description|default:line.description }}</textarea>
               </label>
             </div>
 
@@ -163,13 +178,24 @@
                   <select name="match::{{ line.field_prefix }}">
                     <option value="">Neu anlegen</option>
                     {% for candidate in line.candidates %}
-                      <option value="{{ candidate.pk }}">{{ candidate.label }}</option>
+                      <option value="{{ candidate.pk }}" {% if line.selected_match == candidate.pk|stringformat:"s" %}selected{% endif %}>{{ candidate.label }}</option>
                     {% endfor %}
                   </select>
                 {% endif %}
               </label>
+              {% include "parts/_location_fields.html" with type_field="location_type::"|add:line.field_prefix name_field="location_name::"|add:line.field_prefix position_field="location_position::"|add:line.field_prefix type_value=line.location_type name_value=line.location_name position_value=line.location_position extra_attrs='data-line-location' %}
+              {% if line.part %}
+                <div class="current-location">
+                  <strong>Aktueller Lagerort:</strong> {% if line.part_has_location %}{{ line.part_location }}{% else %}nicht zugeordnet{% endif %}
+                  {% if line.part_has_location %}
+                    <label class="inline">
+                      <input type="checkbox" name="change_location::{{ line.field_prefix }}" {% if line.change_location %}checked{% endif %}> Lagerort ändern
+                    </label>
+                  {% endif %}
+                </div>
+              {% endif %}
               <label class="inline skip">
-                <input type="checkbox" name="skip::{{ line.field_prefix }}"> Überspringen
+                <input type="checkbox" name="skip::{{ line.field_prefix }}" data-skip {% if line.skip %}checked{% endif %}> Überspringen
               </label>
             </div>
           </section>
@@ -182,6 +208,41 @@
 
   <script>
     (function () {
+      function value(selector, root) {
+        var el = (root || document).querySelector(selector);
+        return el ? el.value : "";
+      }
+      function showDefaults() {
+        document.querySelectorAll("details.import-document").forEach(function (details) {
+          var doc = details.querySelectorAll("[data-default='doc']");
+          var batch = document.querySelectorAll("[data-default='batch']");
+          var source = Array.prototype.some.call(doc, function (el) { return el.value; }) ? doc : batch;
+          var shown = Array.prototype.map.call(source, function (el) { return el.value; });
+          details.querySelectorAll("[data-line]").forEach(function (line) {
+            var fields = line.querySelectorAll("[data-line-location]");
+            Array.prototype.forEach.call(fields, function (field, i) {
+              if (field.tagName === "INPUT") { field.placeholder = shown[i] || ""; }
+            });
+          });
+        });
+      }
+      function toggleSkip(line) {
+        var skip = line.querySelector("[data-skip]");
+        line.querySelectorAll("[data-line-location]").forEach(function (field) {
+          field.disabled = !!(skip && skip.checked);
+        });
+      }
+      document.querySelectorAll("[data-default]").forEach(function (el) {
+        el.addEventListener("input", showDefaults);
+        el.addEventListener("change", showDefaults);
+      });
+      document.querySelectorAll("[data-line]").forEach(function (line) {
+        var skip = line.querySelector("[data-skip]");
+        if (skip) { skip.addEventListener("change", function () { toggleSkip(line); }); }
+        toggleSkip(line);
+      });
+      showDefaults();
+
       function grow(area) {
         area.style.height = "auto";
         area.style.height = area.scrollHeight + 2 + "px";

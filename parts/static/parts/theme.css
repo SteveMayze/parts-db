@@ -226,3 +226,21 @@ thead th {
   color: var(--text);
   overflow-wrap: anywhere;
 }
+
+.location-default {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.7rem 0.6rem;
+}
+
+.location-default legend {
+  font-weight: bold;
+  color: var(--muted);
+  padding: 0 0.3rem;
+}
+
+.current-location {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}

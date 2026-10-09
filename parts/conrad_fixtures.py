@@ -79,6 +79,7 @@ def make_layout_b_pdf(
 
     for page_number, rows in enumerate(pages, start=1):
         is_last = page_number == len(pages)
+        left(420.0, 70.0, "Conrad Electronic SE", size=6.0)
         left(235.0, 92.6, title, font="Helvetica-Bold", size=10.0)
         left(352.9, 101.0, f"Seite {page_number} / {len(pages)}", size=5.0)
         left(241.8, 109.1, "Rechnungs-Nr.", size=5.0)
