@@ -1,6 +1,48 @@
 from django.contrib import admin
 
-from .models import ImportedDocument, Part
+from .models import ImportedDocument, Part, Project, PurchaseDocument, PurchaseLine, Supplier
+
+
+class PurchaseLineInline(admin.TabularInline):
+    model = PurchaseLine
+    extra = 1
+
+
+@admin.register(Supplier)
+class SupplierAdmin(admin.ModelAdmin):
+    list_display = ("name", "url", "created_at")
+    search_fields = ("name", "url")
+
+
+@admin.register(Project)
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ("name", "client", "active", "note", "created_at")
+    search_fields = ("name", "client", "note")
+    list_filter = ("active", "client")
+
+
+@admin.register(PurchaseDocument)
+class PurchaseDocumentAdmin(admin.ModelAdmin):
+    list_display = (
+        "supplier",
+        "document_type",
+        "document_number",
+        "document_date",
+        "related_order_number",
+        "paper_invoice_no",
+        "paper_filed",
+        "filing_location",
+    )
+    search_fields = ("supplier__name", "document_number", "related_order_number", "paper_invoice_no", "filing_location")
+    list_filter = ("supplier", "document_type", "paper_filed")
+    inlines = (PurchaseLineInline,)
+
+
+@admin.register(PurchaseLine)
+class PurchaseLineAdmin(admin.ModelAdmin):
+    list_display = ("document", "position", "supplier_part_no", "description", "part", "project", "quantity", "unit_price")
+    search_fields = ("supplier_part_no", "description", "manufacturer_part_no", "part__value")
+    list_filter = ("document__supplier", "project", "price_is_net")
 
 
 @admin.register(Part)

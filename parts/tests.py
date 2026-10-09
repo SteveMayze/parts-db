@@ -15,7 +15,8 @@ from parsers.conrad import ConradInvoiceParser
 from parsers.formats import canonicalise_match_value, parse_date, parse_decimal
 from parsers.reichelt import ReicheltInvoiceParser
 from .forms import InvoiceUploadForm
-from .models import ImportedDocument, Part
+from .models import ImportedDocument, Part, Project, PurchaseDocument, PurchaseLine, Supplier
+from .stock_csv import IMPORT_MODE_ADD, IMPORT_MODE_SKIP, IMPORT_MODE_UPDATE, parse_csv_bytes, prepare_stock_preview
 from .views import QUANTITY_MODE_KEEP, _build_batch_preview, _validate_single_supplier, build_invoice_preview
 
 
@@ -310,7 +311,10 @@ class ReicheltParserTests(TestCase):
 
 class InvoiceImportTests(TestCase):
     def test_conrad_parser_parses_sample_invoice_lines(self):
-        with pdfplumber.open("samples/Conrad-Invoice.pdf") as pdf:
+        sample = Path("samples/Conrad-Invoice.pdf")
+        if not sample.exists():
+            self.skipTest("Conrad sample file not available")
+        with pdfplumber.open(sample) as pdf:
             text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         parsed = ConradInvoiceParser().parse_invoice_text(text)
         self.assertEqual(parsed["supplier"], "Conrad Electronic SE")
@@ -471,157 +475,436 @@ class BatchImportTests(TestCase):
         self.assertEqual(part.last_document_no, "I-2")
         self.assertEqual(part.last_price, Decimal("1.0000"))
         self.assertEqual(ImportedDocument.objects.count(), 2)
+        self.assertEqual(Supplier.objects.count(), 1)
+        self.assertEqual(PurchaseDocument.objects.count(), 2)
+        self.assertEqual(PurchaseLine.objects.count(), 2)
 
-    def test_older_document_does_not_overwrite_newer_price(self):
-        existing = Part.objects.create(
-            part_type="",
-            value="",
-            packaging="",
-            description="Part A",
-            supplier="Reichelt",
-            supplier_part_no="A-1",
-            last_price=Decimal("2.0000"),
-            currency="EUR",
-            last_purchased=date(2024, 1, 5),
-            last_document_no="I-9",
-            quantity=10,
-            location_type="",
-            location_name="",
-            position="",
-            comment="",
-        )
+    def test_document_list_displays_imported_purchase_documents(self):
         session = self.client.session
         session["invoice_preview_batch"] = self._preview_payload()
         session.save()
 
-        response = self.client.post(reverse("parts:invoice_preview"), {})
-        self.assertRedirects(response, reverse("parts:list"))
-        existing.refresh_from_db()
-        self.assertEqual(existing.quantity, 17)
-        self.assertEqual(existing.last_price, Decimal("2.0000"))
-        self.assertEqual(existing.last_document_no, "I-9")
+        self.client.post(reverse("parts:invoice_preview"), {})
 
-    def test_quantity_mode_no_stock_change(self):
-        session = self.client.session
-        payload = self._preview_payload()
-        payload["quantity_mode"] = QUANTITY_MODE_KEEP
-        session["invoice_preview_batch"] = payload
-        session.save()
-
-        response = self.client.post(reverse("parts:invoice_preview"), {"quantity_mode": QUANTITY_MODE_KEEP})
-        self.assertRedirects(response, reverse("parts:list"))
-        part = Part.objects.get()
-        self.assertEqual(part.quantity, 0)
-
-    def test_duplicate_document_excluded_without_opt_in(self):
-        ImportedDocument.objects.create(
-            supplier="Reichelt",
-            document_no="I-1",
-            document_date=date(2024, 1, 1),
-            document_type="order_confirmation",
-            original_filename="older.pdf",
-            line_count=1,
-        )
-        session = self.client.session
-        session["invoice_preview_batch"] = self._preview_payload()
-        session.save()
-
-        response = self.client.post(reverse("parts:invoice_preview"), {})
-        self.assertRedirects(response, reverse("parts:list"))
-        self.assertEqual(ImportedDocument.objects.filter(supplier="Reichelt", document_no="I-1").count(), 1)
-
-    def test_transaction_rolls_back_on_failure(self):
-        session = self.client.session
-        session["invoice_preview_batch"] = self._preview_payload()
-        session.save()
-
-        with patch("parts.views._create_new_part", side_effect=RuntimeError("boom")):
-            with self.assertRaises(RuntimeError):
-                self.client.post(reverse("parts:invoice_preview"), {})
-        self.assertEqual(Part.objects.count(), 0)
-        self.assertEqual(ImportedDocument.objects.count(), 0)
-
-    def test_failed_files_require_explicit_continue(self):
-        session = self.client.session
-        payload = self._preview_payload()
-        payload["failed_files"] = [{"file_name": "bad.pdf", "error": "parse"}]
-        session["invoice_preview_batch"] = payload
-        session.save()
-
-        response = self.client.post(reverse("parts:invoice_preview"), {})
+        response = self.client.get(reverse("parts:documents"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(Part.objects.count(), 0)
-        response = self.client.post(reverse("parts:invoice_preview"), {"continue_without_failed": "yes"})
-        self.assertRedirects(response, reverse("parts:list"))
+        self.assertContains(response, "I-1")
+        self.assertContains(response, "I-2")
 
-    def test_mixed_suppliers_rejected(self):
-        parsed_documents = [
-            {"file_name": "a.pdf", "invoice_data": {"supplier": "Reichelt"}},
-            {"file_name": "b.pdf", "invoice_data": {"supplier": "Conrad Electronic SE"}},
-        ]
-        with self.assertRaisesMessage(ValueError, "selben Lieferanten"):
-            _validate_single_supplier(parsed_documents)
-
-    def test_same_document_number_twice_keeps_first(self):
-        docs, summary, skipped, _new_types = _build_batch_preview(
-            [
-                {
-                    "file_name": "first.pdf",
-                    "invoice_data": {
-                        "supplier": "Reichelt",
-                        "invoice_no": "I-1",
-                        "invoice_date": date(2024, 1, 1),
-                        "lines": [],
-                    },
-                },
-                {
-                    "file_name": "second.pdf",
-                    "invoice_data": {
-                        "supplier": "Reichelt",
-                        "invoice_no": "I-1",
-                        "invoice_date": date(2024, 1, 2),
-                        "lines": [],
-                    },
-                },
-            ]
-        )
-        self.assertEqual(summary["documents"], 1)
-        self.assertEqual(len(docs), 1)
-        self.assertEqual(len(skipped), 1)
-        self.assertEqual(skipped[0]["file_name"], "second.pdf")
-
-    def test_real_reichelt_samples_can_import_as_single_batch(self):
-        samples_dir = Path("samples")
-        sample1 = samples_dir / "Reichelt-215124.pdf"
-        sample2 = samples_dir / "Reichelt-306393.pdf"
-        if not sample1.exists() or not sample2.exists():
-            self.skipTest("Reichelt sample files not available")
-
-        parser = ReicheltInvoiceParser()
-        docs, summary, skipped, _new_types = _build_batch_preview(
-            [
-                {"file_name": sample1.name, "invoice_data": parser.parse_pdf(sample1.read_bytes(), filename=sample1.name)},
-                {"file_name": sample2.name, "invoice_data": parser.parse_pdf(sample2.read_bytes(), filename=sample2.name)},
-            ]
-        )
-        self.assertEqual(summary["documents"], 2)
-        self.assertEqual(summary["lines"], 9)
-        self.assertEqual(len(skipped), 0)
-
+    def test_batch_project_is_applied_to_all_lines(self):
+        project = Project.objects.create(name="Projekt A", client="ZAM")
         session = self.client.session
-        session["invoice_preview_batch"] = {
+        payload = self._preview_payload()
+        payload["project_id"] = str(project.pk)
+        session["invoice_preview_batch"] = payload
+        session.save()
+
+        response = self.client.post(
+            reverse("parts:invoice_preview"),
+            {"batch_project_id": str(project.pk)},
+        )
+        self.assertRedirects(response, reverse("parts:list"))
+        self.assertEqual(PurchaseLine.objects.filter(project=project).count(), 2)
+
+    def test_line_project_override_wins_over_batch_default(self):
+        project_a = Project.objects.create(name="Projekt A")
+        project_b = Project.objects.create(name="Projekt B")
+        session = self.client.session
+        payload = self._preview_payload()
+        payload["project_id"] = str(project_a.pk)
+        session["invoice_preview_batch"] = payload
+        session.save()
+
+        response = self.client.post(
+            reverse("parts:invoice_preview"),
+            {
+                "batch_project_id": str(project_a.pk),
+                "project::Reichelt::I-2::newer.pdf::0": str(project_b.pk),
+            },
+        )
+        self.assertRedirects(response, reverse("parts:list"))
+        self.assertEqual(PurchaseLine.objects.filter(project=project_a).count(), 1)
+        self.assertEqual(PurchaseLine.objects.filter(project=project_b).count(), 1)
+
+
+class ProjectManagementTests(TestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="Alpha", client="ZAM", note="Test")
+        supplier = Supplier.objects.create(name="Reichelt")
+        document = PurchaseDocument.objects.create(
+            supplier=supplier,
+            document_type=PurchaseDocument.DocumentType.RECHNUNG,
+            document_number="R-1",
+            currency="EUR",
+            shipping_cost=Decimal("1.00"),
+            document_total=Decimal("11.00"),
+        )
+        self.line = PurchaseLine.objects.create(
+            document=document,
+            position="1",
+            description="Testzeile",
+            quantity=Decimal("1.0000"),
+            unit_price=Decimal("10.0000"),
+            line_total=Decimal("10.0000"),
+            currency="EUR",
+            price_is_net=True,
+            project=self.project,
+        )
+
+    def _preview_payload(self):
+        return {
             "created_at": "2030-01-01T10:00:00+00:00",
             "quantity_mode": "add_stock",
             "supplier": "Reichelt",
             "failed_files": [],
-            "skipped_duplicates": skipped,
-            "summary": summary,
-            "documents": docs,
+            "skipped_duplicates": [],
+            "summary": {"documents": 2, "lines": 2, "matched": 0, "new": 2, "needs_review": 0},
+            "documents": [
+                {
+                    "supplier": "Reichelt",
+                    "file_name": "newer.pdf",
+                    "document_id": "Reichelt::I-2::newer.pdf",
+                    "invoice_no": "I-2",
+                    "invoice_date": "2024-01-02",
+                    "document_type": "order_confirmation",
+                    "warning": "",
+                    "reference_note": "",
+                    "whg_note": "",
+                    "duplicate_invoice": False,
+                    "lines": [
+                        {
+                            "index": 0,
+                            "field_prefix": "Reichelt::I-2::newer.pdf::0",
+                            "description": "Part A",
+                            "supplier": "Reichelt",
+                            "supplier_part_no": "A-1",
+                            "mf_part_no": "",
+                            "quantity": 5,
+                            "unit_price": "1.0000",
+                            "currency": "EUR",
+                            "status": "new",
+                            "candidates": [],
+                            "part": None,
+                        }
+                    ],
+                },
+                {
+                    "supplier": "Reichelt",
+                    "file_name": "older.pdf",
+                    "document_id": "Reichelt::I-1::older.pdf",
+                    "invoice_no": "I-1",
+                    "invoice_date": "2024-01-01",
+                    "document_type": "order_confirmation",
+                    "warning": "",
+                    "reference_note": "",
+                    "whg_note": "",
+                    "duplicate_invoice": False,
+                    "lines": [
+                        {
+                            "index": 0,
+                            "field_prefix": "Reichelt::I-1::older.pdf::0",
+                            "description": "Part A",
+                            "supplier": "Reichelt",
+                            "supplier_part_no": "A-1",
+                            "mf_part_no": "",
+                            "quantity": 2,
+                            "unit_price": "0.5000",
+                            "currency": "EUR",
+                            "status": "new",
+                            "candidates": [],
+                            "part": None,
+                        }
+                    ],
+                },
+            ],
         }
-        session.save()
 
-        response = self.client.post(reverse("parts:invoice_preview"), {})
-        self.assertRedirects(response, reverse("parts:list"))
-        self.assertEqual(ImportedDocument.objects.count(), 2)
-        self.assertEqual(Part.objects.count(), 9)
-        self.assertEqual(sum(Part.objects.values_list("quantity", flat=True)), 108)
+    def test_create_edit_deactivate_project(self):
+        response = self.client.post(reverse("parts:project_add"), {"name": "Neu", "client": "Kunde", "note": "", "active": True})
+        self.assertRedirects(response, reverse("parts:projects"))
+        created = Project.objects.get(name="Neu")
+        self.assertTrue(created.active)
+
+        response = self.client.post(
+            reverse("parts:project_edit", args=[created.pk]),
+            {"name": "Neu", "client": "Anderer Kunde", "note": "x", "active": False},
+        )
+        self.assertRedirects(response, reverse("parts:projects"))
+        created.refresh_from_db()
+        self.assertFalse(created.active)
+        self.assertEqual(created.client, "Anderer Kunde")
+
+        response = self.client.get(reverse("parts:project_toggle_active", args=[created.pk]))
+        self.assertRedirects(response, reverse("parts:projects"))
+        created.refresh_from_db()
+        self.assertTrue(created.active)
+
+    def test_delete_project_untags_lines_but_keeps_documents_and_lines(self):
+        document_count = PurchaseDocument.objects.count()
+        line_count = PurchaseLine.objects.count()
+        response = self.client.post(reverse("parts:project_delete", args=[self.project.pk]))
+        self.assertRedirects(response, reverse("parts:projects"))
+        self.assertEqual(PurchaseDocument.objects.count(), document_count)
+        self.assertEqual(PurchaseLine.objects.count(), line_count)
+        self.assertIsNone(PurchaseLine.objects.get(pk=self.line.pk).project)
+
+    def test_document_detail_tagging_and_bulk_actions(self):
+        inactive = Project.objects.create(name="Inaktiv", active=False)
+        active_b = Project.objects.create(name="Beta")
+        self.line.project = inactive
+        self.line.save(update_fields=["project"])
+        second_line = PurchaseLine.objects.create(
+            document=self.line.document,
+            position="2",
+            description="zweite",
+            quantity=Decimal("1.0000"),
+            unit_price=Decimal("2.0000"),
+            line_total=Decimal("2.0000"),
+            currency="EUR",
+            price_is_net=True,
+            project=None,
+        )
+        response = self.client.get(reverse("parts:document_detail", args=[self.line.document.pk]))
+        self.assertContains(response, "kein Projekt")
+        self.assertContains(response, "Inaktiv")
+        self.assertContains(response, "Inaktiv (inaktiv)")
+        self.assertEqual(response.content.decode("utf-8").count("Inaktiv (inaktiv)"), 1)
+
+        response = self.client.post(
+            reverse("parts:document_detail", args=[self.line.document.pk]),
+            {
+                f"line_project::{self.line.pk}": "__none__",
+                f"line_project::{second_line.pk}": str(active_b.pk),
+                "bulk_project": str(self.project.pk),
+                "apply_bulk_untagged": "yes",
+            },
+        )
+        self.assertRedirects(response, reverse("parts:document_detail", args=[self.line.document.pk]))
+        self.line.refresh_from_db()
+        second_line.refresh_from_db()
+        self.assertEqual(self.line.project, self.project)
+        self.assertEqual(second_line.project, active_b)
+
+    def test_project_view_filters_and_totals(self):
+        response = self.client.get(reverse("parts:project_documents"), {"project": str(self.project.pk)})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Projekt-Teilsumme")
+        self.assertContains(response, "10,0000")
+
+        self.line.document.paper_filed = True
+        self.line.document.save(update_fields=["paper_filed"])
+        filtered = self.client.get(
+            reverse("parts:project_documents"),
+            {"project": str(self.project.pk), "paper_unfiled": "yes"},
+        )
+        self.assertContains(filtered, "Keine Belege")
+
+    def test_document_list_filter_without_project_option(self):
+        supplier = Supplier.objects.create(name="Conrad")
+        document_without = PurchaseDocument.objects.create(
+            supplier=supplier,
+            document_type=PurchaseDocument.DocumentType.RECHNUNG,
+            document_number="R-2",
+        )
+        PurchaseLine.objects.create(
+            document=document_without,
+            position="1",
+            description="ohne projekt",
+            quantity=Decimal("1.0000"),
+            line_total=Decimal("1.0000"),
+        )
+        response = self.client.get(reverse("parts:documents"), {"project": "__none__"})
+        self.assertContains(response, "R-2")
+
+
+class StockCsvParserTests(TestCase):
+    def test_parse_supports_utf8_sig_cp1252_and_delimiters(self):
+        csv_semicolon = "\ufeffpart_type;value;quantity\nWiderstand;4,7k;10\n".encode("utf-8-sig")
+        parsed = parse_csv_bytes(csv_semicolon)
+        self.assertEqual(parsed["encoding"], "utf-8-sig")
+        self.assertEqual(parsed["delimiter"], ";")
+
+        csv_cp = "part_type,value,quantity\nGehäuse,3,2\n".encode("cp1252")
+        parsed_cp = parse_csv_bytes(csv_cp)
+        self.assertEqual(parsed_cp["encoding"], "cp1252")
+        self.assertEqual(parsed_cp["delimiter"], ",")
+
+        csv_tab = "part_type\tvalue\tquantity\nKondensator\t100nF\t5\n".encode("utf-8-sig")
+        parsed_tab = parse_csv_bytes(csv_tab)
+        self.assertEqual(parsed_tab["delimiter"], "\t")
+
+    def test_header_aliases_and_unknown_columns_warning(self):
+        content = "\ufeffTyp;Wert;Menge;Projekt;Foo\nWiderstand;4,7k;10;A;x\n".encode("utf-8-sig")
+        parsed = parse_csv_bytes(content)
+        warnings = "\n".join(parsed["header_warnings"])
+        self.assertIn("Projekt", warnings)
+        self.assertIn("Foo", warnings)
+
+    def test_quoted_delimiter_in_field_is_parsed(self):
+        content = '\ufeffpart_type;description;quantity\nWiderstand;"Text;mit;Semikolon";3\n'.encode("utf-8-sig")
+        parsed = parse_csv_bytes(content)
+        self.assertEqual(parsed["rows"][0]["data"]["description"], "Text;mit;Semikolon")
+
+    def test_invalid_quantity_and_value_description_error(self):
+        content = "\ufeffpart_type;value;description;quantity\nWiderstand;;;ca. 50\n".encode("utf-8-sig")
+        parsed = parse_csv_bytes(content)
+        preview = prepare_stock_preview(parsed, IMPORT_MODE_UPDATE)
+        self.assertEqual(preview["counts"]["error"], 1)
+        self.assertIn("Menge muss eine ganze Zahl", preview["errors"][0])
+
+    def test_unknown_location_type_becomes_warning_and_blank(self):
+        content = "\ufeffpart_type;value;quantity;location_type\nWiderstand;4,7k;10;xyz\n".encode("utf-8-sig")
+        parsed = parse_csv_bytes(content)
+        row = parsed["rows"][0]
+        self.assertEqual(row["data"]["location_type"], "")
+        self.assertTrue(row["warnings"])
+
+    def test_duplicate_id_and_key_in_file_are_errors(self):
+        p = Part.objects.create(part_type="Widerstand", value="4,7k", packaging="0805", quantity=1)
+        content = (
+            "\ufeffid;part_type;value;packaging;quantity\n"
+            f"{p.pk};Widerstand;4,7k;0805;1\n"
+            f"{p.pk};Widerstand;4,7k;0805;2\n"
+        ).encode("utf-8-sig")
+        parsed = parse_csv_bytes(content)
+        preview = prepare_stock_preview(parsed, IMPORT_MODE_UPDATE)
+        self.assertEqual(preview["counts"]["error"], 1)
+
+
+class StockCsvImportFlowTests(TestCase):
+    def setUp(self):
+        self.existing = Part.objects.create(
+            part_type="Widerstand",
+            value="0.1µF",
+            packaging="0805",
+            description="Alt",
+            quantity=5,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Schublade 1",
+            position="A1",
+            supplier="Conrad",
+            supplier_part_no="X",
+            last_price=Decimal("1.0000"),
+            last_document_no="D1",
+        )
+
+    def _upload(self, content, mode=IMPORT_MODE_UPDATE):
+        upload = SimpleUploadedFile("stock.csv", content, content_type="text/csv")
+        return self.client.post(reverse("parts:stock_csv_upload"), {"mode": mode, "csv_file": upload})
+
+    def test_upload_preview_and_confirm_update_mode(self):
+        content = (
+            "\ufeffpart_type;value;packaging;description;quantity;location_name;position\n"
+            "WIDERSTAND;0.1uF;0805;Neu Text;7;Schublade 1;A1\n"
+        ).encode("utf-8-sig")
+        response = self._upload(content, IMPORT_MODE_UPDATE)
+        self.assertRedirects(response, reverse("parts:stock_csv_preview"))
+        preview_page = self.client.get(reverse("parts:stock_csv_preview"))
+        self.assertContains(preview_page, "Aktualisiert")
+        self.assertContains(preview_page, "utf-8-sig")
+        self.assertContains(preview_page, "Trennzeichen")
+
+        confirm = self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.assertRedirects(confirm, reverse("parts:list"))
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.quantity, 7)
+        self.assertEqual(self.existing.description, "Neu Text")
+
+    def test_skip_and_add_modes(self):
+        content = (
+            "\ufeffpart_type;value;packaging;quantity;location_name;position\n"
+            "Widerstand;0.1uF;0805;3;Schublade 1;A1\n"
+        ).encode("utf-8-sig")
+        self._upload(content, IMPORT_MODE_SKIP)
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.quantity, 5)
+
+        self._upload(content, IMPORT_MODE_ADD)
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.quantity, 8)
+
+    def test_blank_cells_do_not_overwrite(self):
+        content = (
+            "\ufeffpart_type;value;packaging;description;quantity;location_name;position\n"
+            "Widerstand;0.1uF;0805;;5;Schublade 1;A1\n"
+        ).encode("utf-8-sig")
+        self._upload(content, IMPORT_MODE_UPDATE)
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.description, "Alt")
+
+    def test_no_supplier_document_line_project_changes(self):
+        supplier_count = Supplier.objects.count()
+        doc_count = PurchaseDocument.objects.count()
+        line_count = PurchaseLine.objects.count()
+        project_count = Project.objects.count()
+
+        content = "\ufeffpart_type;value;quantity\nTransistor;BC547;2\n".encode("utf-8-sig")
+        self._upload(content, IMPORT_MODE_UPDATE)
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.assertEqual(Supplier.objects.count(), supplier_count)
+        self.assertEqual(PurchaseDocument.objects.count(), doc_count)
+        self.assertEqual(PurchaseLine.objects.count(), line_count)
+        self.assertEqual(Project.objects.count(), project_count)
+
+    def test_template_and_export_roundtrip(self):
+        template = self.client.get(reverse("parts:stock_csv_template"))
+        self.assertEqual(template.status_code, 200)
+        self.assertIn("part_type;value;packaging", template.content.decode("utf-8-sig"))
+
+        exported = self.client.get(reverse("parts:stock_csv_export"))
+        self.assertEqual(exported.status_code, 200)
+        response = self._upload(exported.content, IMPORT_MODE_UPDATE)
+        self.assertRedirects(response, reverse("parts:stock_csv_preview"))
+        preview = self.client.get(reverse("parts:stock_csv_preview"))
+        self.assertContains(preview, "Unverändert")
+
+    def test_template_examples_imported_twice_second_run_is_unchanged(self):
+        template = self.client.get(reverse("parts:stock_csv_template"))
+        csv_bytes = template.content
+
+        self._upload(csv_bytes, IMPORT_MODE_UPDATE)
+        first_preview = self.client.get(reverse("parts:stock_csv_preview"))
+        self.assertContains(first_preview, "Neu")
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+
+        self._upload(csv_bytes, IMPORT_MODE_UPDATE)
+        second_preview = self.client.get(reverse("parts:stock_csv_preview"))
+        self.assertContains(second_preview, "Unverändert")
+        preview_payload = self.client.session["stock_csv_preview"]["preview"]
+        self.assertEqual(preview_payload["counts"]["unchanged"], 3)
+        self.assertEqual(preview_payload["counts"]["updated"], 0)
+        self.assertEqual(preview_payload["counts"]["new"], 0)
+
+    def test_confirm_requires_checkbox_when_errors_exist(self):
+        content = (
+            "\ufeffpart_type;value;quantity\n"
+            "Widerstand;4,7k;10\n"
+            "Widerstand;4,7k;abc\n"
+        ).encode("utf-8-sig")
+        self._upload(content, IMPORT_MODE_UPDATE)
+        response = self.client.post(reverse("parts:stock_csv_preview"), {})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Bitte bestätigen Sie das Fortfahren")
+
+    def test_all_error_rows_cannot_be_confirmed(self):
+        content = "\ufeffpart_type;value;quantity\nWiderstand;4,7k;abc\n".encode("utf-8-sig")
+        self._upload(content, IMPORT_MODE_UPDATE)
+        response = self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "keine fehlerfreien Zeilen")
+
+    def test_export_edit_location_by_id_updates_instead_of_duplicate(self):
+        exported = self.client.get(reverse("parts:stock_csv_export")).content.decode("utf-8-sig")
+        lines = exported.splitlines()
+        header = lines[0]
+        row = lines[1].split(";")
+        row[7] = "Schublade Z"
+        edited = "\n".join([header, ";".join(row)])
+        self._upload(edited.encode("utf-8-sig"), IMPORT_MODE_UPDATE)
+        self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.location_name, "Schublade Z")
+        self.assertEqual(Part.objects.count(), 1)

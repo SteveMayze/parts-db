@@ -79,6 +79,10 @@ class GermanUiLanguageTests(TestCase):
         self.assertEqual(complete_response.status_code, 200)
         self.assert_no_common_english_words(complete_response)
 
+        stock_upload_response = self.client.get(reverse("parts:stock_csv_upload"))
+        self.assertEqual(stock_upload_response.status_code, 200)
+        self.assert_no_common_english_words(stock_upload_response)
+
         session = self.client.session
         session["invoice_preview_batch"] = {
             "created_at": "2030-01-01T10:00:00+00:00",
@@ -125,3 +129,32 @@ class GermanUiLanguageTests(TestCase):
         preview_response = self.client.get(reverse("parts:invoice_preview"))
         self.assertEqual(preview_response.status_code, 200)
         self.assert_no_common_english_words(preview_response)
+
+        session["stock_csv_preview"] = {
+            "created_at": "2030-01-01T10:00:00+00:00",
+            "preview": {
+                "encoding": "utf-8-sig",
+                "delimiter": ";",
+                "mode": "update_existing",
+                "mode_label": "Vorhandene aktualisieren",
+                "warnings": [],
+                "errors": [],
+                "counts": {"new": 0, "updated": 0, "unchanged": 1, "error": 0, "warning": 0},
+                "rows": [
+                    {
+                        "line_no": 2,
+                        "status": "unchanged",
+                        "status_label": "Unverändert",
+                        "changes": [],
+                        "warnings": [],
+                        "errors": [],
+                        "data": {"part_type": "Widerstand", "value": "10k", "packaging": "0805", "quantity": "1", "location_name": "Mappe 1"},
+                    }
+                ],
+                "distinct": {"part_type": [], "packaging": [], "location_type": [], "location_name": []},
+            },
+        }
+        session.save()
+        stock_preview_response = self.client.get(reverse("parts:stock_csv_preview"))
+        self.assertEqual(stock_preview_response.status_code, 200)
+        self.assert_no_common_english_words(stock_preview_response)

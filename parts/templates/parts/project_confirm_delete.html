@@ -1,0 +1,15 @@
+{% extends "parts/base.html" %}
+{% block title %}Projekt löschen{% endblock %}
+{% block content %}
+  <h1>Projekt löschen</h1>
+  <p>
+    Soll das Projekt <strong>{{ object.name }}</strong> wirklich gelöscht werden?<br>
+    Dabei werden {{ tagged_lines_count }} Zeilen in {{ tagged_documents_count }} Belegen auf „kein Projekt“ gesetzt.
+    Belege und Zeilen bleiben erhalten.
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit">Projekt löschen</button>
+    <a href="{% url 'parts:projects' %}">Abbrechen</a>
+  </form>
+{% endblock %}

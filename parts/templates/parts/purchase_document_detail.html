@@ -1,0 +1,94 @@
+{% extends "parts/base.html" %}
+{% block title %}Kaufbeleg {{ document.document_number }}{% endblock %}
+{% block content %}
+  <h1>Kaufbeleg {{ document.document_number }}</h1>
+
+  <p class="toolbar">
+    <a href="{% url 'parts:documents' %}">Zur Liste</a> |
+    <a href="{% url 'parts:project_add' %}?next={% url 'parts:document_detail' document.pk %}">Neues Projekt …</a>
+  </p>
+
+  <p>
+    <strong>Lieferant:</strong> {{ document.supplier.name }}<br>
+    <strong>Typ:</strong> {{ document.document_type }}<br>
+    <strong>Datum:</strong> {{ document.document_date|default:"-" }}<br>
+    <strong>Auftragsnummer:</strong> {{ document.related_order_number|default:"-" }}<br>
+    <strong>Papierbeleg-Nr.:</strong> {{ document.paper_invoice_no|default:"-" }}<br>
+    <strong>Papier abgelegt:</strong> {% if document.paper_filed %}Ja{% else %}Nein{% endif %}<br>
+    <strong>Ablageort:</strong> {{ document.filing_location|default:"-" }}<br>
+    <strong>Gesamt:</strong> {{ document.document_total }} {{ document.currency }}<br>
+    <strong>PDF:</strong>
+    {% if document.pdf_file %}
+      <a href="{% url 'parts:document_download' document.pk %}">Download</a>
+    {% else %}
+      -
+    {% endif %}
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    <p>
+      <strong>Projekt für alle markierten Zeilen:</strong>
+      <select name="bulk_project">
+        <option value="">Keine Sammelaktion</option>
+        <option value="__none__">kein Projekt</option>
+        {% for project in bulk_projects %}
+          <option value="{{ project.pk }}">{{ project.name }}</option>
+        {% endfor %}
+      </select>
+      <label><input type="checkbox" name="apply_bulk_marked" value="yes"> anwenden</label>
+      <label><input type="checkbox" name="apply_bulk_untagged" value="yes"> auf alle Zeilen ohne Projekt anwenden</label>
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Mark.</th>
+          <th>Pos.</th>
+          <th>Beschreibung</th>
+          <th>Lieferantenteil</th>
+          <th>Menge</th>
+          <th>Einzelpreis</th>
+          <th>Gesamt</th>
+          <th>Bauteil</th>
+          <th>Projekt</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in line_rows %}
+          {% with line=row.line %}
+          <tr>
+            <td><input type="checkbox" name="mark_line::{{ line.pk }}"></td>
+            <td>{{ line.position }}</td>
+            <td>{{ line.description }}</td>
+            <td>{{ line.supplier_part_no }}</td>
+            <td>{{ line.quantity }}</td>
+            <td>{{ line.unit_price }} {{ line.currency }}</td>
+            <td>{{ line.line_total }} {{ line.currency }}</td>
+            <td>
+              {% if line.part %}
+                <a href="{% url 'parts:detail' line.part.pk %}">{{ line.part }}</a>
+              {% else %}
+                -
+              {% endif %}
+            </td>
+            <td>
+              <select name="line_project::{{ line.pk }}">
+                <option value="__none__">kein Projekt</option>
+                {% for project in row.choices %}
+                  <option value="{{ project.pk }}" {% if line.project_id == project.pk %}selected{% endif %}>
+                    {{ project.name }}{% if not project.active %} (inaktiv){% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+          </tr>
+          {% endwith %}
+        {% empty %}
+          <tr><td colspan="9">Keine Zeilen vorhanden.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit">Projektzuordnungen speichern</button>
+  </form>
+{% endblock %}

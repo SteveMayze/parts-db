@@ -1,0 +1,37 @@
+{% extends "parts/base.html" %}
+{% block title %}Projekt{% endblock %}
+{% block content %}
+  <h1>Projekt bearbeiten</h1>
+  <p class="toolbar"><a href="{% url 'parts:projects' %}">Zur Projektliste</a></p>
+
+  <form method="post">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <p>
+      <label for="{{ form.name.id_for_label }}">Name</label>
+      {{ form.name }}
+      {{ form.name.errors }}
+    </p>
+    <p>
+      <label for="{{ form.client.id_for_label }}">Kunde</label>
+      <input type="text" name="{{ form.client.name }}" id="{{ form.client.id_for_label }}" value="{{ form.client.value|default:'' }}" list="client-suggestions">
+      <datalist id="client-suggestions">
+        {% for item in client_suggestions %}
+          <option value="{{ item }}"></option>
+        {% endfor %}
+      </datalist>
+      {{ form.client.errors }}
+    </p>
+    <p>
+      <label for="{{ form.note.id_for_label }}">Notiz</label>
+      {{ form.note }}
+      {{ form.note.errors }}
+    </p>
+    <p>
+      <label for="{{ form.active.id_for_label }}">Aktiv</label>
+      {{ form.active }}
+      {{ form.active.errors }}
+    </p>
+    <button type="submit">Speichern</button>
+  </form>
+{% endblock %}

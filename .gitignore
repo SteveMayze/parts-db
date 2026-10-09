@@ -12,4 +12,5 @@ samples/*
 !samples/.gitignore
 samples/
 inventory.ini
+media/
 

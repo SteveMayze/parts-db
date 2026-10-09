@@ -1,0 +1,123 @@
+{% extends "parts/base.html" %}
+{% block title %}CSV-Importvorschau{% endblock %}
+{% block content %}
+  <h1>CSV-Importvorschau</h1>
+  <p class="toolbar"><a href="{% url 'parts:stock_csv_upload' %}">Neue Datei laden</a></p>
+  <p>
+    <strong>Encoding:</strong> {{ preview.encoding }}<br>
+    <strong>Trennzeichen:</strong> {{ delimiter_label }}<br>
+    <strong>Modus:</strong> {{ preview.mode_label }}
+  </p>
+
+  {% if preview.warnings %}
+    <div class="warning">
+      <strong>Warnungen zur Datei:</strong>
+      <ul>
+        {% for warning in preview.warnings %}
+          <li>{{ warning }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <p>
+    <strong>Neu:</strong> {{ preview.counts.new }} |
+    <strong>Aktualisiert:</strong> {{ preview.counts.updated }} |
+    <strong>Unverändert:</strong> {{ preview.counts.unchanged }} |
+    <strong>Fehler:</strong> {{ preview.counts.error }} |
+    <strong>Warnungen:</strong> {{ preview.counts.warning }}
+  </p>
+
+  {% if preview.errors %}
+    <div class="warning">
+      <strong>Fehler (werden nicht importiert):</strong>
+      <ul>
+        {% for error in preview.errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <h2>Werteübersicht</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Bereich</th>
+        <th>Wert</th>
+        <th>Anzahl Zeilen</th>
+        <th>Neu in DB</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for field, items in preview.distinct.items %}
+        {% for item in items %}
+          <tr>
+            <td>{{ field }}</td>
+            <td>{{ item.value }}</td>
+            <td>{{ item.count }}</td>
+            <td>{% if item.is_new %}Ja{% else %}Nein{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td>{{ field }}</td><td>-</td><td>0</td><td>-</td></tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Zeilen</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Zeile</th>
+        <th>Status</th>
+        <th>Typ</th>
+        <th>Wert</th>
+        <th>Verpackung</th>
+        <th>Menge</th>
+        <th>Lagerort</th>
+        <th>Änderungen (alt → neu)</th>
+        <th>Hinweise</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in preview.rows %}
+        <tr>
+          <td>{{ row.line_no }}</td>
+          <td>{{ row.status_label }}</td>
+          <td>{{ row.data.part_type }}</td>
+          <td>{{ row.data.value }}</td>
+          <td>{{ row.data.packaging }}</td>
+          <td>{{ row.data.quantity }}</td>
+          <td>{{ row.data.location_name }}</td>
+          <td>
+            {% for change in row.changes %}
+              {{ change.field }}: {{ change.old }} → {{ change.new }}<br>
+            {% endfor %}
+          </td>
+          <td>
+            {% for msg in row.errors %}
+              Fehler: {{ msg }}<br>
+            {% endfor %}
+            {% for msg in row.warnings %}
+              Warnung: {{ msg }}<br>
+            {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <form method="post">
+    {% csrf_token %}
+    {% if preview.counts.error %}
+      <p>
+        <label>
+          <input type="checkbox" name="continue_without_errors" value="yes">
+          Mit fehlerfreien Zeilen fortfahren
+        </label>
+      </p>
+    {% endif %}
+    <button type="submit">Import bestätigen</button>
+  </form>
+{% endblock %}

@@ -1,6 +1,7 @@
 from django import forms
 
-from .models import Part
+from .models import Part, Project
+from .stock_csv import IMPORT_MODE_ADD, IMPORT_MODE_SKIP, IMPORT_MODE_UPDATE
 
 
 class MultiPDFInput(forms.ClearableFileInput):
@@ -69,4 +70,30 @@ class InvoiceUploadForm(forms.Form):
     continue_without_failed = forms.BooleanField(
         required=False,
         label="Mit den erfolgreich analysierten Dateien fortfahren",
+    )
+
+
+class ProjectForm(forms.ModelForm):
+    class Meta:
+        model = Project
+        fields = ["name", "client", "note", "active"]
+
+
+class StockCsvUploadForm(forms.Form):
+    csv_file = forms.FileField(
+        label="CSV-Datei",
+        help_text="Unterstützt UTF-8 (mit BOM) und cp1252. Trennzeichen: ; , oder Tabulator.",
+    )
+    mode = forms.ChoiceField(
+        label="Importmodus",
+        choices=(
+            (IMPORT_MODE_UPDATE, "Vorhandene aktualisieren (Standard)"),
+            (IMPORT_MODE_SKIP, "Vorhandene überspringen"),
+            (IMPORT_MODE_ADD, "Mengen zu vorhandenen addieren"),
+        ),
+        initial=IMPORT_MODE_UPDATE,
+    )
+    continue_without_errors = forms.BooleanField(
+        required=False,
+        label="Mit den fehlerfreien Zeilen fortfahren",
     )

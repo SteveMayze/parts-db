@@ -1,0 +1,62 @@
+{% extends "parts/base.html" %}
+{% block title %}Projekte{% endblock %}
+{% block content %}
+  <h1>Projekte</h1>
+  <p class="toolbar">
+    <a href="{% url 'parts:project_add' %}">Projekt anlegen</a> |
+    <a href="{% url 'parts:project_documents' %}">Projektbelege</a> |
+    <a href="{% url 'parts:list' %}">Bauteile</a>
+  </p>
+
+  <form method="get">
+    <label for="client">Kunde</label>
+    <input id="client" name="client" list="client-list" value="{{ current_client }}">
+    <datalist id="client-list">
+      {% for item in clients %}
+        <option value="{{ item }}"></option>
+      {% endfor %}
+    </datalist>
+
+    <label for="active">Aktiv</label>
+    <select id="active" name="active">
+      <option value="">Alle</option>
+      <option value="yes" {% if current_active == "yes" %}selected{% endif %}>Ja</option>
+      <option value="no" {% if current_active == "no" %}selected{% endif %}>Nein</option>
+    </select>
+    <button type="submit">Filtern</button>
+    <a href="{% url 'parts:projects' %}">Zurücksetzen</a>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Kunde</th>
+        <th>Aktiv</th>
+        <th>Getaggte Zeilen</th>
+        <th>Belege</th>
+        <th>Aktionen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for project in projects %}
+        <tr>
+          <td>{{ project.name }}</td>
+          <td>{{ project.client|default:"-" }}</td>
+          <td>{% if project.active %}Ja{% else %}Nein{% endif %}</td>
+          <td>{{ project.tagged_lines_count }}</td>
+          <td>{{ project.tagged_documents_count }}</td>
+          <td>
+            <a href="{% url 'parts:project_edit' project.pk %}">Bearbeiten</a>
+            <a href="{% url 'parts:project_toggle_active' project.pk %}">
+              {% if project.active %}Deaktivieren{% else %}Aktivieren{% endif %}
+            </a>
+            <a href="{% url 'parts:project_delete' project.pk %}">Löschen</a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6">Keine Projekte gefunden.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

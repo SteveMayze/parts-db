@@ -1,6 +1,146 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator
 from django.db import models
+from django.db.models.functions import Lower
+
+
+class Supplier(models.Model):
+    name = models.CharField("Name", max_length=255)
+    url = models.URLField("URL", blank=True)
+    created_at = models.DateTimeField("Erstellt am", auto_now_add=True)
+    updated_at = models.DateTimeField("Aktualisiert am", auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="uniq_supplier_name_casefold"),
+        ]
+        verbose_name = "Lieferant"
+        verbose_name_plural = "Lieferanten"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self):
+        super().clean()
+        self.name = (self.name or "").strip()
+        if not self.name:
+            raise ValidationError({"name": "Der Lieferantenname ist erforderlich."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class Project(models.Model):
+    name = models.CharField("Projektname", max_length=255)
+    client = models.CharField("Kunde", max_length=255, blank=True, db_index=True)
+    note = models.TextField("Notiz", blank=True)
+    active = models.BooleanField("Aktiv", default=True, db_index=True)
+    created_at = models.DateTimeField("Erstellt am", auto_now_add=True)
+    updated_at = models.DateTimeField("Aktualisiert am", auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="uniq_project_name_casefold"),
+        ]
+        verbose_name = "Projekt"
+        verbose_name_plural = "Projekte"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self):
+        super().clean()
+        self.name = (self.name or "").strip()
+        if not self.name:
+            raise ValidationError({"name": "Der Projektname ist erforderlich."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class PurchaseDocument(models.Model):
+    class DocumentType(models.TextChoices):
+        RECHNUNG = "Rechnung", "Rechnung"
+        BESTELLUNG = "Bestellung", "Bestellung"
+        AUFTRAGSBESTATIGUNG = "Auftragsbestätigung", "Auftragsbestätigung"
+        SONSTIGES = "Sonstiges", "Sonstiges"
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name="purchase_documents", verbose_name="Lieferant")
+    document_type = models.CharField(
+        "Belegtyp",
+        max_length=40,
+        choices=DocumentType.choices,
+        default=DocumentType.RECHNUNG,
+    )
+    document_number = models.CharField("Belegnummer", max_length=200)
+    document_date = models.DateField("Belegdatum", blank=True, null=True)
+    related_order_number = models.CharField("Auftragsnummer", max_length=200, blank=True)
+    currency = models.CharField("Währung", max_length=3, default="EUR", blank=True)
+    shipping_cost = models.DecimalField("Versandkosten", max_digits=12, decimal_places=4, default=Decimal("0.00"), blank=True)
+    document_total = models.DecimalField("Belegsumme", max_digits=12, decimal_places=4, default=Decimal("0.00"), blank=True)
+    pdf_file = models.FileField(
+        "PDF-Datei",
+        upload_to="purchase_documents/%Y/%m/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
+    )
+    filing_location = models.CharField("Einlagerungsort", max_length=255, blank=True)
+    paper_invoice_no = models.CharField("Papierbelegnummer", max_length=200, blank=True)
+    paper_filed = models.BooleanField("Papier abgelegt", default=False)
+    notes = models.TextField("Notizen", blank=True)
+    created_at = models.DateTimeField("Erstellt am", auto_now_add=True)
+
+    class Meta:
+        ordering = ["-document_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["supplier", "document_type", "document_number"], name="uniq_purchase_document_supplier_type_no"),
+        ]
+        verbose_name = "Kaufbeleg"
+        verbose_name_plural = "Kaufbelege"
+
+    def __str__(self) -> str:
+        return f"{self.supplier} {self.document_type} {self.document_number}".strip()
+
+
+class PurchaseLine(models.Model):
+    document = models.ForeignKey(PurchaseDocument, on_delete=models.CASCADE, related_name="lines", verbose_name="Beleg")
+    position = models.CharField("Position", max_length=50, blank=True)
+    supplier_part_no = models.CharField("Lieferantenteilnummer", max_length=200, blank=True)
+    description = models.TextField("Beschreibung", blank=True)
+    manufacturer_part_no = models.CharField("Herstellerteilnummer", max_length=200, blank=True)
+    quantity = models.DecimalField("Menge", max_digits=12, decimal_places=4, default=Decimal("0.0000"))
+    unit_price = models.DecimalField("Einzelpreis", max_digits=12, decimal_places=4, blank=True, null=True)
+    line_total = models.DecimalField("Gesamtpreis", max_digits=12, decimal_places=4, blank=True, null=True)
+    currency = models.CharField("Währung", max_length=3, default="EUR", blank=True)
+    price_is_net = models.BooleanField("Preis ist netto", default=True)
+    price_is_derived = models.BooleanField("Preis ist abgeleitet", default=False)
+    part = models.ForeignKey(
+        "Part",
+        on_delete=models.SET_NULL,
+        related_name="purchase_lines",
+        null=True,
+        blank=True,
+        verbose_name="Bauteil",
+    )
+    project = models.ForeignKey(Project, on_delete=models.SET_NULL, related_name="purchase_lines", null=True, blank=True, verbose_name="Projekt")
+    notes = models.TextField("Notizen", blank=True)
+    created_at = models.DateTimeField("Erstellt am", auto_now_add=True)
+
+    class Meta:
+        ordering = ["document", "position", "id"]
+        verbose_name = "Kaufzeile"
+        verbose_name_plural = "Kaufzeilen"
+
+    def __str__(self) -> str:
+        summary = self.description or self.supplier_part_no or "Unbenannte Zeile"
+        return f"{self.document} / {summary}"
 
 
 class Part(models.Model):
@@ -74,6 +214,21 @@ class Part(models.Model):
         if self.position:
             pieces.append(self.position)
         return " / ".join(pieces) if pieces else "Nicht zugeordnet"
+
+    @property
+    def purchase_history(self):
+        return self.purchase_lines.select_related("document", "document__supplier", "project").order_by("-document__document_date", "-document__created_at", "-created_at")
+
+    @property
+    def last_purchase_document(self):
+        return self.purchase_history.first()
+
+    @property
+    def last_purchase_date(self):
+        latest = self.purchase_history.first()
+        if latest and latest.document and latest.document.document_date:
+            return latest.document.document_date
+        return self.last_purchased
 
 
 class ImportedDocument(models.Model):

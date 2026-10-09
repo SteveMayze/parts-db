@@ -43,6 +43,17 @@
         <option value="{{ value }}" {% if preview.quantity_mode == value %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select>
+    <br>
+    <label for="batch_project_id"><strong>Projekt (für alle Zeilen, optional):</strong></label>
+    <select id="batch_project_id" name="batch_project_id">
+      <option value="">kein Projekt</option>
+      {% for project in active_projects %}
+        <option value="{{ project.pk }}" {% if preview.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
+          {{ project.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <a href="{{ project_new_link }}">Neues Projekt …</a>
 
     {% if preview.failed_files %}
       <p>
@@ -90,6 +101,7 @@
               <th>Wert (Vorschlag)</th>
               <th>Verpackung (Vorschlag)</th>
               <th>Status</th>
+              <th>Projekt</th>
               <th>Treffer</th>
               <th>Überspringen</th>
             </tr>
@@ -121,6 +133,17 @@
                   {% if line.packaging_suggested %}<small>Vorschlag: {{ line.packaging_suggested }}</small>{% endif %}
                 </td>
                 <td>{{ line.status_label }}</td>
+                <td>
+                  <select name="project::{{ line.field_prefix }}">
+                    <option value="">Batch-Vorgabe verwenden</option>
+                    <option value="__none__">kein Projekt</option>
+                    {% for project in active_projects %}
+                      <option value="{{ project.pk }}" {% if line.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
+                        {{ project.name }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                </td>
                 <td>
                   {% if line.part %}
                     <select name="match::{{ line.field_prefix }}">

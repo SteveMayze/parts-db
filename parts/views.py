@@ -2,29 +2,84 @@ from __future__ import annotations
 
 import io
 import re
+import csv
+from pathlib import Path
+from uuid import uuid4
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.contrib import messages
+from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
-from django.http import HttpResponseRedirect
-from django.shortcuts import redirect, render
+from django.db.models import Count, Q
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
-from django.views.generic import CreateView, DeleteView, ListView, UpdateView
+from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
 from parsers import detect_parser_from_text, get_parser_for_supplier
 from parsers.describe import suggest_part_fields
 from parsers.formats import canonicalise_match_value, normalise_unicode_text
-from .forms import InvoiceUploadForm, PartForm
-from .models import ImportedDocument, Part
+from .forms import InvoiceUploadForm, PartForm, ProjectForm, StockCsvUploadForm
+from .models import ImportedDocument, Part, Project, PurchaseDocument, PurchaseLine, Supplier
+from .stock_csv import (
+    IMPORT_MODE_UPDATE,
+    apply_stock_preview,
+    delimiter_label,
+    parse_csv_bytes,
+    prepare_stock_preview,
+)
 
 MAX_BATCH_FILES = 20
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 PREVIEW_TTL = timedelta(hours=24)
+STOCK_PREVIEW_TTL = timedelta(hours=24)
 QUANTITY_MODE_ADD = "add_stock"
 QUANTITY_MODE_KEEP = "no_stock_change"
+DOC_TYPE_MAP = {
+    "invoice": PurchaseDocument.DocumentType.RECHNUNG,
+    "order": PurchaseDocument.DocumentType.BESTELLUNG,
+    "order_confirmation": PurchaseDocument.DocumentType.AUFTRAGSBESTATIGUNG,
+}
+
+
+def _storage_document_type(raw_value):
+    if not raw_value:
+        return PurchaseDocument.DocumentType.SONSTIGES
+    return DOC_TYPE_MAP.get(str(raw_value).strip().casefold(), PurchaseDocument.DocumentType.SONSTIGES)
+
+
+def _tmp_import_dir() -> Path:
+    target = Path(settings.MEDIA_ROOT) / "tmp_imports"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _save_temp_pdf(uploaded_file):
+    suffix = Path(uploaded_file.name).suffix or ".pdf"
+    tmp_name = f"{timezone.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex}{suffix}"
+    target = _tmp_import_dir() / tmp_name
+    with target.open("wb") as handle:
+        for chunk in uploaded_file.chunks():
+            handle.write(chunk)
+    return str(target)
+
+
+def _project_choices_with_current(current_project=None):
+    active_projects = list(Project.objects.filter(active=True).order_by("name"))
+    if current_project and current_project not in active_projects:
+        active_projects.append(current_project)
+    return active_projects
+
+
+def _resolve_project_selection(raw_value, fallback=None):
+    value = (raw_value or "").strip()
+    if not value:
+        return fallback
+    if value == "__none__":
+        return None
+    return Project.objects.filter(pk=value).first()
 
 
 def _canonicalise_search(value):
@@ -160,6 +215,7 @@ def build_invoice_preview(invoice_data):
                 "part_type_suggested": str(suggestions["part_type"] or ""),
                 "value_suggested": str(suggestions["value"] or ""),
                 "packaging_suggested": str(suggestions["packaging"] or ""),
+                "project_id": "",
             }
         )
 
@@ -172,6 +228,9 @@ def build_invoice_preview(invoice_data):
         "supplier": invoice_data.get("supplier", ""),
         "invoice_no": invoice_data.get("invoice_no", ""),
         "invoice_date": _serialise_preview_date(invoice_data.get("invoice_date", "")),
+        "pdf_temp_path": invoice_data.get("pdf_temp_path", ""),
+        "pdf_original_name": invoice_data.get("pdf_original_name", ""),
+        "related_order_number": invoice_data.get("reference_note", ""),
         "warning": invoice_data.get("warning", ""),
         "warnings": invoice_data.get("warnings", []),
         "reference_note": invoice_data.get("reference_note", ""),
@@ -179,6 +238,7 @@ def build_invoice_preview(invoice_data):
         "duplicate_invoice": bool(duplicate_existing),
         "duplicate_imported_at": duplicate_at,
         "document_type": invoice_data.get("document_type", ""),
+        "document_total": str(invoice_data.get("net_total") or invoice_data.get("gross_total") or Decimal("0.00")),
         "new_type_names": sorted(new_type_names),
         "lines": lines,
     }
@@ -296,6 +356,21 @@ def _get_valid_preview_payload(request):
     return payload
 
 
+def _get_valid_stock_preview(request):
+    payload = request.session.get("stock_csv_preview")
+    if not payload:
+        return None
+    created_at = _parse_preview_timestamp(payload)
+    if created_at is None:
+        request.session.pop("stock_csv_preview", None)
+        return None
+    if timezone.now() - created_at > STOCK_PREVIEW_TTL:
+        request.session.pop("stock_csv_preview", None)
+        messages.error(request, "Die CSV-Vorschau ist abgelaufen. Bitte Datei erneut hochladen.")
+        return None
+    return payload
+
+
 class PartListView(ListView):
     model = Part
     template_name = "parts/part_list.html"
@@ -366,6 +441,462 @@ class PartDeleteView(DeleteView):
     success_url = reverse_lazy("parts:list")
 
 
+def stock_csv_upload(request):
+    if request.method == "POST":
+        form = StockCsvUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            upload = request.FILES["csv_file"]
+            mode = form.cleaned_data["mode"]
+            try:
+                parsed = parse_csv_bytes(upload.read())
+                preview = prepare_stock_preview(parsed, mode=mode)
+            except ValueError as exc:
+                form.add_error("csv_file", str(exc))
+            else:
+                request.session["stock_csv_preview"] = {
+                    "created_at": timezone.now().isoformat(),
+                    "preview": preview,
+                }
+                return redirect("parts:stock_csv_preview")
+    else:
+        form = StockCsvUploadForm()
+    return render(request, "parts/stock_csv_upload.html", {"form": form})
+
+
+def stock_csv_preview(request):
+    payload = _get_valid_stock_preview(request)
+    if not payload:
+        return redirect("parts:stock_csv_upload")
+    preview = payload["preview"]
+
+    if request.method == "POST":
+        continue_without_errors = request.POST.get("continue_without_errors") == "yes"
+        has_errors = any(row["status"] == "error" for row in preview["rows"])
+        valid_rows = [row for row in preview["rows"] if row["status"] != "error"]
+        if has_errors and not continue_without_errors:
+            messages.error(request, "Bitte bestätigen Sie das Fortfahren ohne fehlerhafte Zeilen.")
+            return render(
+                request,
+                "parts/stock_csv_preview.html",
+                {"preview": preview, "delimiter_label": delimiter_label(preview.get("delimiter", ";"))},
+            )
+        if not valid_rows:
+            messages.error(request, "Es gibt keine fehlerfreien Zeilen zum Importieren.")
+            return render(
+                request,
+                "parts/stock_csv_preview.html",
+                {"preview": preview, "delimiter_label": delimiter_label(preview.get("delimiter", ";"))},
+            )
+        transactional_preview = dict(preview)
+        transactional_preview["rows"] = valid_rows
+        with transaction.atomic():
+            created, updated = apply_stock_preview(transactional_preview)
+        request.session.pop("stock_csv_preview", None)
+        messages.success(request, f"CSV-Import abgeschlossen. Neu: {created}, aktualisiert: {updated}.")
+        return redirect("parts:list")
+
+    return render(
+        request,
+        "parts/stock_csv_preview.html",
+        {"preview": preview, "delimiter_label": delimiter_label(preview.get("delimiter", ";"))},
+    )
+
+
+def stock_csv_template(request):
+    response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
+    response["Content-Disposition"] = 'attachment; filename="stock_vorlage.csv"'
+    response.write("\ufeff")
+    writer = csv.writer(response, delimiter=";")
+    writer.writerow([
+        "id",
+        "part_type",
+        "value",
+        "packaging",
+        "description",
+        "quantity",
+        "location_type",
+        "location_name",
+        "position",
+        "manufacturer",
+        "mf_part_no",
+        "comment",
+    ])
+    writer.writerow(["", "Widerstand", "4,7k", "0805", "SMD Widerstand 1%", "200", "drawer", "Schubladenblock A", "Fach 3", "Yageo", "RC0805", "Bestand Alt"])
+    writer.writerow(["", "Kondensator", "100nF", "0603", "Kerko X7R", "350", "folder", "Mappe 2", "Seite 4", "Murata", "GRM188", ""])
+    writer.writerow(["", "Transistor", "", "TO-92", "BC547B NPN", "50", "", "Sortierbox 1", "Reihe C", "onsemi", "BC547B", "ohne exakten Wert"])
+    return response
+
+
+def stock_csv_export(request):
+    response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
+    response["Content-Disposition"] = 'attachment; filename="bauteile_export.csv"'
+    response.write("\ufeff")
+    writer = csv.writer(response, delimiter=";")
+    writer.writerow([
+        "id",
+        "part_type",
+        "value",
+        "packaging",
+        "description",
+        "quantity",
+        "location_type",
+        "location_name",
+        "position",
+        "manufacturer",
+        "mf_part_no",
+        "comment",
+    ])
+    for part in Part.objects.order_by("id"):
+        writer.writerow(
+            [
+                part.id,
+                part.part_type,
+                part.value,
+                part.packaging,
+                part.description,
+                part.quantity,
+                part.location_type,
+                part.location_name,
+                part.position,
+                part.manufacturer,
+                part.mf_part_no,
+                part.comment,
+            ]
+        )
+    return response
+
+
+class ProjectListView(ListView):
+    model = Project
+    template_name = "parts/project_list.html"
+    context_object_name = "projects"
+
+    def get_queryset(self):
+        queryset = Project.objects.annotate(
+            tagged_lines_count=Count("purchase_lines", distinct=True),
+            tagged_documents_count=Count("purchase_lines__document", distinct=True),
+        )
+        client = self.request.GET.get("client", "").strip()
+        active = self.request.GET.get("active", "").strip()
+        if client:
+            queryset = queryset.filter(client__iexact=client)
+        if active in {"yes", "no"}:
+            queryset = queryset.filter(active=(active == "yes"))
+        return queryset.order_by("name")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["current_client"] = self.request.GET.get("client", "").strip()
+        context["current_active"] = self.request.GET.get("active", "").strip()
+        context["clients"] = (
+            Project.objects.exclude(client="")
+            .order_by("client")
+            .values_list("client", flat=True)
+            .distinct()
+        )
+        return context
+
+
+class ProjectCreateView(CreateView):
+    model = Project
+    form_class = ProjectForm
+    template_name = "parts/project_form.html"
+    success_url = reverse_lazy("parts:projects")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["client_suggestions"] = (
+            Project.objects.exclude(client="")
+            .order_by("client")
+            .values_list("client", flat=True)
+            .distinct()
+        )
+        return context
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        next_url = self.request.GET.get("next", "").strip()
+        if next_url:
+            return redirect(next_url)
+        messages.success(self.request, "Projekt wurde angelegt.")
+        return response
+
+
+class ProjectUpdateView(UpdateView):
+    model = Project
+    form_class = ProjectForm
+    template_name = "parts/project_form.html"
+    success_url = reverse_lazy("parts:projects")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["client_suggestions"] = (
+            Project.objects.exclude(client="")
+            .order_by("client")
+            .values_list("client", flat=True)
+            .distinct()
+        )
+        return context
+
+    def form_valid(self, form):
+        messages.success(self.request, "Projekt wurde aktualisiert.")
+        return super().form_valid(form)
+
+
+class ProjectDeleteView(DeleteView):
+    model = Project
+    template_name = "parts/project_confirm_delete.html"
+    success_url = reverse_lazy("parts:projects")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.object
+        context["tagged_lines_count"] = project.purchase_lines.count()
+        context["tagged_documents_count"] = project.purchase_lines.values("document_id").distinct().count()
+        return context
+
+    def form_valid(self, form):
+        project = self.object
+        PurchaseLine.objects.filter(project=project).update(project=None)
+        messages.success(self.request, "Projekt wurde gelöscht. Zugeordnete Zeilen sind jetzt ohne Projekt.")
+        return super().form_valid(form)
+
+
+def project_toggle_active(request, pk):
+    project = get_object_or_404(Project, pk=pk)
+    project.active = not project.active
+    project.save(update_fields=["active", "updated_at"])
+    state = "aktiviert" if project.active else "deaktiviert"
+    messages.success(request, f"Projekt wurde {state}.")
+    return redirect("parts:projects")
+
+
+class PurchaseDocumentListView(ListView):
+    model = PurchaseDocument
+    template_name = "parts/purchase_document_list.html"
+    context_object_name = "documents"
+
+    def get_queryset(self):
+        queryset = PurchaseDocument.objects.select_related("supplier").prefetch_related("lines", "lines__project")
+        query = self.request.GET.get("q", "").strip()
+        supplier = self.request.GET.get("supplier", "").strip()
+        document_type = self.request.GET.get("document_type", "").strip()
+        year = self.request.GET.get("year", "").strip()
+        project = self.request.GET.get("project", "").strip()
+        paper_filed = self.request.GET.get("paper_filed", "").strip()
+        has_pdf = self.request.GET.get("has_pdf", "").strip()
+
+        if query:
+            queryset = queryset.filter(
+                Q(document_number__icontains=query)
+                | Q(paper_invoice_no__icontains=query)
+                | Q(related_order_number__icontains=query)
+                | Q(supplier__name__icontains=query)
+                | Q(filing_location__icontains=query)
+                | Q(lines__description__icontains=query)
+            )
+        if supplier:
+            queryset = queryset.filter(supplier_id=supplier)
+        if document_type:
+            queryset = queryset.filter(document_type=document_type)
+        if year:
+            queryset = queryset.filter(document_date__year=year)
+        if project:
+            if project == "__none__":
+                queryset = queryset.filter(lines__project__isnull=True)
+            else:
+                queryset = queryset.filter(lines__project_id=project)
+        if paper_filed in {"yes", "no"}:
+            queryset = queryset.filter(paper_filed=(paper_filed == "yes"))
+        if has_pdf in {"yes", "no"}:
+            queryset = queryset.filter(pdf_file__isnull=(has_pdf == "no"))
+        return queryset.distinct().order_by("-document_date", "-created_at")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["current_q"] = self.request.GET.get("q", "").strip()
+        context["current_supplier"] = self.request.GET.get("supplier", "").strip()
+        context["current_document_type"] = self.request.GET.get("document_type", "").strip()
+        context["current_year"] = self.request.GET.get("year", "").strip()
+        context["current_project"] = self.request.GET.get("project", "").strip()
+        context["current_paper_filed"] = self.request.GET.get("paper_filed", "").strip()
+        context["current_has_pdf"] = self.request.GET.get("has_pdf", "").strip()
+        context["suppliers"] = Supplier.objects.order_by("name")
+        context["projects"] = Project.objects.filter(active=True).order_by("name")
+        context["document_types"] = PurchaseDocument.DocumentType.choices
+        context["years"] = (
+            PurchaseDocument.objects.exclude(document_date__isnull=True)
+            .dates("document_date", "year", order="DESC")
+        )
+        return context
+
+
+class PurchaseDocumentDetailView(DetailView):
+    model = PurchaseDocument
+    template_name = "parts/purchase_document_detail.html"
+    context_object_name = "document"
+
+    def get_queryset(self):
+        return PurchaseDocument.objects.select_related("supplier").prefetch_related("lines", "lines__part", "lines__project")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        document = self.object
+        context["line_rows"] = [
+            {
+                "line": line,
+                "choices": _project_choices_with_current(line.project),
+            }
+            for line in document.lines.all()
+        ]
+        context["bulk_projects"] = Project.objects.filter(active=True).order_by("name")
+        return context
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        bulk_project = request.POST.get("bulk_project", "").strip()
+        apply_bulk_marked = request.POST.get("apply_bulk_marked") == "yes"
+        apply_bulk_untagged = request.POST.get("apply_bulk_untagged") == "yes"
+
+        with transaction.atomic():
+            for line in self.object.lines.all():
+                field = f"line_project::{line.pk}"
+                project = _resolve_project_selection(request.POST.get(field), fallback=line.project)
+                line.project = project
+                line.save(update_fields=["project"])
+
+            if bulk_project:
+                bulk_target = _resolve_project_selection(bulk_project, fallback=None)
+                if apply_bulk_marked:
+                    marked_ids = [
+                        int(key.split("::", 1)[1])
+                        for key in request.POST.keys()
+                        if key.startswith("mark_line::")
+                    ]
+                    if marked_ids:
+                        PurchaseLine.objects.filter(document=self.object, pk__in=marked_ids).update(project=bulk_target)
+                if apply_bulk_untagged:
+                    PurchaseLine.objects.filter(document=self.object, project__isnull=True).update(project=bulk_target)
+
+        messages.success(request, "Projektzuordnungen wurden gespeichert.")
+        return redirect("parts:document_detail", pk=self.object.pk)
+
+
+class PartDetailView(DetailView):
+    model = Part
+    template_name = "parts/part_detail.html"
+    context_object_name = "part"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["purchase_history"] = self.object.purchase_history
+        return context
+
+
+def purchase_document_download(request, pk):
+    document = get_object_or_404(PurchaseDocument, pk=pk)
+    if not document.pdf_file:
+        raise Http404("Zu diesem Beleg ist keine PDF-Datei gespeichert.")
+    filename = document.pdf_file.name.rsplit("/", 1)[-1]
+    return FileResponse(document.pdf_file.open("rb"), as_attachment=True, filename=filename, content_type="application/pdf")
+
+
+def project_documents(request):
+    project_id = request.GET.get("project", "").strip()
+    client = request.GET.get("client", "").strip()
+    paper_unfiled = request.GET.get("paper_unfiled", "").strip() == "yes"
+    selected_project = None
+    selected_client = client
+    documents = []
+    line_items = []
+    net_total_sum = Decimal("0.0000")
+    gross_total_sum = Decimal("0.0000")
+
+    lines = PurchaseLine.objects.none()
+    if project_id:
+        selected_project = get_object_or_404(Project, pk=project_id)
+        lines = PurchaseLine.objects.filter(project=selected_project)
+    elif client:
+        lines = PurchaseLine.objects.filter(project__client__iexact=client)
+
+    if lines.exists():
+        if paper_unfiled:
+            lines = lines.filter(document__paper_filed=False)
+        lines = lines.select_related("document", "document__supplier", "project").order_by(
+            "-document__document_date", "document__document_number", "position"
+        )
+
+        by_document = {}
+        for line in lines:
+            entry = by_document.setdefault(
+                line.document_id,
+                {
+                    "document": line.document,
+                    "project_subtotal": Decimal("0.0000"),
+                    "line_count": 0,
+                    "untagged_lines": 0,
+                    "mixed_projects_hint": False,
+                    "has_gross_lines": False,
+                },
+            )
+            entry["line_count"] += 1
+            if line.line_total is not None:
+                entry["project_subtotal"] += line.line_total
+            if not line.price_is_net:
+                entry["has_gross_lines"] = True
+            line_items.append(line)
+
+        documents_scope = PurchaseDocument.objects.filter(pk__in=by_document.keys()).prefetch_related("lines")
+        for document in documents_scope:
+            untagged_count = document.lines.filter(project__isnull=True).count()
+            other_project_lines = document.lines.exclude(project__isnull=True)
+            if selected_project:
+                other_project_lines = other_project_lines.exclude(project=selected_project)
+            if client:
+                other_project_lines = other_project_lines.exclude(project__client__iexact=client)
+            by_document[document.pk]["untagged_lines"] = untagged_count
+            by_document[document.pk]["mixed_projects_hint"] = other_project_lines.exists() or untagged_count > 0
+
+        documents = sorted(
+            by_document.values(),
+            key=lambda entry: (
+                entry["document"].document_date or datetime.min.date(),
+                entry["document"].document_number or "",
+            ),
+            reverse=True,
+        )
+
+        for entry in documents:
+            subtotal = entry["project_subtotal"]
+            if entry["has_gross_lines"]:
+                gross_total_sum += subtotal
+            else:
+                net_total_sum += subtotal
+
+    return render(
+        request,
+        "parts/project_documents.html",
+        {
+            "projects": Project.objects.order_by("name"),
+            "clients": (
+                Project.objects.exclude(client="")
+                .order_by("client")
+                .values_list("client", flat=True)
+                .distinct()
+            ),
+            "selected_project": selected_project,
+            "selected_client": selected_client,
+            "documents": documents,
+            "line_items": line_items,
+            "current_project": project_id,
+            "current_client": client,
+            "paper_unfiled": paper_unfiled,
+            "net_total_sum": net_total_sum,
+            "gross_total_sum": gross_total_sum,
+        },
+    )
+
+
 def invoice_upload(request):
     if request.method == "POST":
         form = InvoiceUploadForm(request.POST, request.FILES)
@@ -383,10 +914,19 @@ def invoice_upload(request):
                     if uploaded_file.size > MAX_FILE_SIZE_BYTES:
                         failed_files.append({"file_name": uploaded_file.name, "error": "Datei überschreitet das 10-MB-Limit."})
                         continue
+                    temp_pdf_path = ""
                     try:
+                        temp_pdf_path = _save_temp_pdf(uploaded_file)
+                        uploaded_file.seek(0)
                         invoice_data = _parse_uploaded_document(uploaded_file, supplier_override=supplier_override)
+                        invoice_data["pdf_temp_path"] = temp_pdf_path
+                        invoice_data["pdf_original_name"] = uploaded_file.name
                         parsed_documents.append({"file_name": uploaded_file.name, "invoice_data": invoice_data})
                     except ValueError as exc:
+                        if temp_pdf_path:
+                            temp_path = Path(temp_pdf_path)
+                            if temp_path.exists():
+                                temp_path.unlink()
                         failed_files.append({"file_name": uploaded_file.name, "error": str(exc)})
 
                 if parsed_documents:
@@ -404,6 +944,7 @@ def invoice_upload(request):
                 request.session["invoice_preview_batch"] = {
                     "created_at": timezone.now().isoformat(),
                     "quantity_mode": QUANTITY_MODE_ADD,
+                    "project_id": "",
                     "supplier": documents[0]["supplier"] if documents else "",
                     "documents": documents,
                     "failed_files": failed_files,
@@ -475,6 +1016,30 @@ def _create_new_part(
     )
 
 
+def _create_purchase_document(doc, supplier):
+    purchase_document = PurchaseDocument.objects.create(
+        supplier=supplier,
+        document_type=_storage_document_type(doc.get("document_type")),
+        document_number=doc.get("invoice_no", ""),
+        document_date=datetime.strptime(doc["invoice_date"], "%Y-%m-%d").date() if doc.get("invoice_date") else None,
+        related_order_number=doc.get("related_order_number", ""),
+        currency="EUR",
+        shipping_cost=Decimal("0.0000"),
+        document_total=Decimal(doc.get("document_total") or "0.00"),
+        filing_location="",
+        paper_invoice_no="",
+        notes=doc.get("warning", ""),
+    )
+    temp_path = doc.get("pdf_temp_path", "")
+    if temp_path:
+        source = Path(temp_path)
+        if source.exists():
+            with source.open("rb") as handle:
+                purchase_document.pdf_file.save(doc.get("pdf_original_name", source.name), handle, save=True)
+            source.unlink()
+    return purchase_document
+
+
 def invoice_preview(request):
     payload = _get_valid_preview_payload(request)
     if not payload:
@@ -482,6 +1047,7 @@ def invoice_preview(request):
 
     if request.method == "POST":
         quantity_mode = request.POST.get("quantity_mode", QUANTITY_MODE_ADD)
+        batch_project_id = request.POST.get("batch_project_id", payload.get("project_id", "")).strip()
         if quantity_mode not in {QUANTITY_MODE_ADD, QUANTITY_MODE_KEEP}:
             quantity_mode = QUANTITY_MODE_ADD
 
@@ -489,8 +1055,21 @@ def invoice_preview(request):
         if failed_files and request.POST.get("continue_without_failed") != "yes":
             messages.error(request, "Bitte bestätigen Sie, dass fehlerhafte Dateien ausgeschlossen werden sollen.")
             payload["quantity_mode"] = quantity_mode
+            payload["project_id"] = batch_project_id
             request.session["invoice_preview_batch"] = payload
-            return render(request, "parts/invoice_preview.html", {"preview": payload})
+            return render(
+                request,
+                "parts/invoice_preview.html",
+                {
+                    "preview": payload,
+                    "quantity_mode_choices": [
+                        (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
+                        (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
+                    ],
+                    "active_projects": Project.objects.filter(active=True).order_by("name"),
+                    "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
+                },
+            )
 
         include_known_duplicates = request.POST.get("include_known_duplicates") == "yes"
         documents = payload.get("documents", [])
@@ -510,8 +1089,26 @@ def invoice_preview(request):
                     supplier__iexact=supplier,
                     document_no__iexact=document_no,
                 ).exists()
-                if already_imported and not include_known_duplicates:
+
+                supplier_obj, _supplier_created = Supplier.objects.get_or_create(name=supplier)
+                existing_purchase_document = PurchaseDocument.objects.filter(
+                    supplier=supplier_obj,
+                    document_type=_storage_document_type(doc.get("document_type")),
+                    document_number=document_no,
+                ).first()
+
+                if already_imported and not include_known_duplicates and existing_purchase_document is not None:
+                    temp_path = doc.get("pdf_temp_path", "")
+                    if temp_path:
+                        source = Path(temp_path)
+                        if source.exists():
+                            source.unlink()
                     continue
+
+                purchase_document = existing_purchase_document
+                if purchase_document is None:
+                    purchase_document = _create_purchase_document(doc, supplier_obj)
+                write_purchase_lines = purchase_document.lines.count() == 0
 
                 line_count = 0
                 for line in doc.get("lines", []):
@@ -531,6 +1128,10 @@ def invoice_preview(request):
                     part_type = request.POST.get(f"part_type::{field_prefix}", line.get("part_type", "")).strip()
                     value = request.POST.get(f"value::{field_prefix}", line.get("value", "")).strip()
                     packaging = request.POST.get(f"packaging::{field_prefix}", line.get("packaging", "")).strip()
+                    line_project = _resolve_project_selection(
+                        request.POST.get(f"project::{field_prefix}", ""),
+                        fallback=_resolve_project_selection(batch_project_id, fallback=None),
+                    )
 
                     key = (line_supplier.casefold(), supplier_part_no.casefold())
                     if selected_match:
@@ -575,6 +1176,25 @@ def invoice_preview(request):
                         )
                     if supplier_part_no:
                         resolved_parts_by_key[key] = part
+
+                    if write_purchase_lines:
+                        line_total = (Decimal(quantity) * unit_price).quantize(Decimal("0.0001"))
+                        PurchaseLine.objects.create(
+                            document=purchase_document,
+                            position=str(index + 1),
+                            supplier_part_no=supplier_part_no,
+                            description=description,
+                            manufacturer_part_no=mf_part_no,
+                            quantity=Decimal(quantity),
+                            unit_price=unit_price,
+                            line_total=line_total,
+                            currency=currency,
+                            price_is_net=True,
+                            price_is_derived=(doc.get("document_type") == "order_confirmation"),
+                            part=part,
+                            project=line_project,
+                            notes="",
+                        )
                     line_count += 1
 
                 if not already_imported:
@@ -587,14 +1207,29 @@ def invoice_preview(request):
                         line_count=line_count,
                     )
 
+                temp_path = doc.get("pdf_temp_path", "")
+                if temp_path:
+                    source = Path(temp_path)
+                    if source.exists():
+                        source.unlink()
+
         request.session.pop("invoice_preview_batch", None)
         messages.success(request, "Import abgeschlossen.")
         return redirect("parts:list")
 
-    return render(request, "parts/invoice_preview.html", {"preview": payload, "quantity_mode_choices": [
-        (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
-        (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
-    ]})
+    return render(
+        request,
+        "parts/invoice_preview.html",
+        {
+            "preview": payload,
+            "quantity_mode_choices": [
+                (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
+                (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
+            ],
+            "active_projects": Project.objects.filter(active=True).order_by("name"),
+            "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
+        },
+    )
 
 
 def parts_complete_preview(request):

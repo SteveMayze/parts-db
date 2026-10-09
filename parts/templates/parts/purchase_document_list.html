@@ -1,0 +1,102 @@
+{% extends "parts/base.html" %}
+{% block title %}Kaufbelege{% endblock %}
+{% block content %}
+  <h1>Kaufbelege</h1>
+
+  <p class="toolbar">
+    <a href="{% url 'parts:list' %}">Bauteile</a> |
+    <a href="{% url 'parts:import' %}">Belege importieren</a> |
+    <a href="{% url 'parts:project_documents' %}">Projektbelege</a> |
+    <a href="{% url 'parts:projects' %}">Projekte</a>
+  </p>
+
+  <form method="get">
+    <label for="q">Suche</label>
+    <input id="q" name="q" value="{{ current_q }}" placeholder="Nummer, Auftrag, Lieferant, Ablageort, Zeilenbeschreibung">
+
+    <label for="supplier">Lieferant</label>
+    <select id="supplier" name="supplier">
+      <option value="">Alle</option>
+      {% for supplier in suppliers %}
+        <option value="{{ supplier.pk }}" {% if current_supplier == supplier.pk|stringformat:"s" %}selected{% endif %}>{{ supplier.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="document_type">Typ</label>
+    <select id="document_type" name="document_type">
+      <option value="">Alle</option>
+      {% for value, label in document_types %}
+        <option value="{{ value }}" {% if current_document_type == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="year">Jahr</label>
+    <select id="year" name="year">
+      <option value="">Alle</option>
+      {% for year in years %}
+        <option value="{{ year|date:"Y" }}" {% if current_year == year|date:"Y" %}selected{% endif %}>{{ year|date:"Y" }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="project">Projekt</label>
+    <select id="project" name="project">
+      <option value="">Alle</option>
+      <option value="__none__" {% if current_project == "__none__" %}selected{% endif %}>ohne Projekt</option>
+      {% for project in projects %}
+        <option value="{{ project.pk }}" {% if current_project == project.pk|stringformat:"s" %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="paper_filed">Papier abgelegt</label>
+    <select id="paper_filed" name="paper_filed">
+      <option value="">Alle</option>
+      <option value="yes" {% if current_paper_filed == "yes" %}selected{% endif %}>Ja</option>
+      <option value="no" {% if current_paper_filed == "no" %}selected{% endif %}>Nein</option>
+    </select>
+
+    <label for="has_pdf">Hat PDF</label>
+    <select id="has_pdf" name="has_pdf">
+      <option value="">Alle</option>
+      <option value="yes" {% if current_has_pdf == "yes" %}selected{% endif %}>Ja</option>
+      <option value="no" {% if current_has_pdf == "no" %}selected{% endif %}>Nein</option>
+    </select>
+
+    <button type="submit">Filtern</button>
+    <a href="{% url 'parts:documents' %}">Zurücksetzen</a>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Lieferant</th>
+        <th>Typ</th>
+        <th>Belegnummer</th>
+        <th>Papierbeleg-Nr.</th>
+        <th>Ablageort</th>
+        <th>PDF</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for document in documents %}
+        <tr>
+          <td>{{ document.document_date|default:"-" }}</td>
+          <td>{{ document.supplier.name }}</td>
+          <td>{{ document.document_type }}</td>
+          <td><a href="{% url 'parts:document_detail' document.pk %}">{{ document.document_number }}</a></td>
+          <td>{{ document.paper_invoice_no|default:"-" }}</td>
+          <td>{{ document.filing_location|default:"-" }}</td>
+          <td>
+            {% if document.pdf_file %}
+              <a href="{% url 'parts:document_download' document.pk %}">Download</a>
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7">Keine Kaufbelege gefunden.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}
