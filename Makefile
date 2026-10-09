@@ -3,7 +3,7 @@ PIP := $(PYTHON) -m pip
 ANSIBLE_PLAYBOOK := ANSIBLE_CONFIG=infra/ansible.cfg .venv/bin/ansible-playbook
 ANSIBLE_GALAXY := .venv/bin/ansible-galaxy
 
-.PHONY: setup test check ansible-setup deploy-docker deploy-podman caddy-proxy caddy-disable
+.PHONY: setup test check ansible-setup deploy-docker deploy-podman caddy-proxy caddy-disable caddy-cleanup
 
 setup:
 	$(PIP) install -r requirements.txt
@@ -29,3 +29,6 @@ caddy-proxy:
 
 caddy-disable:
 	$(ANSIBLE_PLAYBOOK) -i infra/inventory.ini infra/configure-caddy-playbook.yaml -e caddy_mode=disable -K -vv
+
+caddy-cleanup:
+	$(ANSIBLE_PLAYBOOK) -i infra/inventory.ini infra/cleanup-caddy-apt-sources.yaml -K -vv

@@ -57,6 +57,34 @@ python manage.py check
 - Search/list page: <http://127.0.0.1:8000/parts/>
 - Admin: <http://127.0.0.1:8000/admin/>
 
+## Purchase history and document storage
+
+The app keeps purchase history in dedicated `Supplier`, `PurchaseDocument`, and `PurchaseLine` records, while the stock table remains the flat `Part` model. Documents can store an optional PDF, and the app is configured to keep uploaded files in the local `media/` directory outside the repository.
+
+UI entry points:
+- `Belege importieren` in the parts page imports PDFs and writes supplier/document/line history.
+- `Kaufbelege` shows searchable/filterable purchase documents.
+- `Projektbelege` lists documents grouped by selected project.
+- `Projekte` provides project management (create/edit/activate/deactivate/delete).
+- `Historie` on a part row shows its purchase history.
+
+For production backups, back up the SQLite file (or database host) and the `media/` folder together so the PDF originals and the database remain in sync. In the Docker/Ansible deployment this folder should live on the same persistent volume as the app data.
+
+## Loading stock from CSV (parts already on hand)
+
+Use this when you have inventory without invoices/documents.
+
+- Open **Bestand aus CSV laden** from the parts list.
+- Download **Vorlage herunterladen** for the exact import format.
+- Supported headers (case-insensitive, any order):  
+  `id, part_type, value, packaging, description, quantity, location_type, location_name, position, manufacturer, mf_part_no, comment`  
+  German aliases from the UI are also accepted (for example `Typ`, `Wert`, `Verpackung`, `Menge`, `Lagerort`, `Herstellerteilnummer`, `Kommentar`).
+- Save CSV as **CSV UTF-8** (or CP1252 is accepted), delimiter `;`, `,` or tab.
+- Keep `quantity` as a whole number (`>= 0`).
+- For spreadsheet safety, format the **packaging** column as text before entering values like `0805`.
+
+The CSV stock load updates only `Part` records. It does **not** create or modify Supplier, PurchaseDocument, PurchaseLine, or Project data.
+
 ## Running tests
 
 Run all tests:
@@ -169,6 +197,24 @@ What it does:
 - runs migrations + `collectstatic`
 - starts/restarts the app container
 - smoke-checks `http://<your-host>:<app_port>/parts/`
+
+### APT issue: stale Caddy Cloudsmith repo
+
+Some hosts still carry a broken Caddy APT source from `dl.cloudsmith.io`. It can return `402 Payment Required` and abort `apt update` before any required package install succeeds.
+
+If you see errors like `Failed to fetch ... dl.cloudsmith.io ... 402` or `repository ... InRelease is no longer signed`, remove the stale repo first:
+
+```bash
+make caddy-cleanup
+```
+
+or directly:
+
+```bash
+ansible-playbook -i infra/inventory.local.ini infra/cleanup-caddy-apt-sources.yaml -K -vv
+```
+
+The cleanup removes stale Caddy source files from `/etc/apt/sources.list.d/` and refreshes the apt cache before the main deployment continues.
 
 ### Secrets and safety
 

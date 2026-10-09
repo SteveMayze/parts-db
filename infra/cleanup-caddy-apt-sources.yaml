@@ -1,0 +1,20 @@
+---
+- hosts: partsdb
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Remove stale Caddy Cloudsmith apt source files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/caddy-stable.list
+        - /etc/apt/sources.list.d/caddy-stable.sources
+        - /etc/apt/sources.list.d/caddy.list
+        - /etc/apt/sources.list.d/caddy.sources
+
+    - name: Refresh apt metadata after removing broken Caddy repo
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0

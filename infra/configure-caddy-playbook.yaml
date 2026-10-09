@@ -8,6 +8,18 @@
     caddyfile_path: /etc/caddy/Caddyfile
 
   tasks:
+    - name: Remove broken Caddy Cloudsmith apt sources before installing Caddy
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/caddy-stable.list
+        - /etc/apt/sources.list.d/caddy-stable.sources
+        - /etc/apt/sources.list.d/caddy.list
+        - /etc/apt/sources.list.d/caddy.sources
+      when: caddy_mode == "proxy"
+
     - name: Ensure Caddy is installed
       become: true
       ansible.builtin.apt:

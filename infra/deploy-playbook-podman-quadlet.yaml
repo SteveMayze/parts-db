@@ -11,6 +11,17 @@
     quadlet_file: "/etc/containers/systemd/{{ app_name }}.container"
 
   pre_tasks:
+    - name: Remove broken Caddy Cloudsmith apt sources before installing packages
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/caddy-stable.list
+        - /etc/apt/sources.list.d/caddy-stable.sources
+        - /etc/apt/sources.list.d/caddy.list
+        - /etc/apt/sources.list.d/caddy.sources
+
     - name: Ping target host
       ansible.builtin.ping:
 
