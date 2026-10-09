@@ -57,6 +57,18 @@ python manage.py check
 - Search/list page: <http://127.0.0.1:8000/parts/>
 - Admin: <http://127.0.0.1:8000/admin/>
 
+## Sortable parts list
+
+The main parts list supports clickable column headers for `Typ`, `Wert`, `Beschreibung`, `Teilenummer` and `Lagerort`. The sort state is encoded in the query string (for example `?sort=type&dir=asc`), so a bookmark or reload keeps the selected order.
+
+The active column shows the sort direction with an arrow and `aria-sort`, while search text, filters and other query parameters remain preserved when switching sort order. Sorting uses a safe whitelist, resets the page to 1, and falls back to the default ordering (`Typ`, then `Wert`, then `Verpackung`) if an invalid sort key or direction is supplied.
+
+The comparison logic is intentionally robust:
+- case-insensitive and umlaut-aware comparison using normalized text (`casefold`, NFC)
+- natural numeric ordering inside text values (for example `Ordner 2` before `Ordner 10`)
+- empty values last in both sort directions
+- stable tie-breaking via the default model ordering
+
 ## Purchase history and document storage
 
 The app keeps purchase history in dedicated `Supplier`, `PurchaseDocument`, and `PurchaseLine` records, while the stock table remains the flat `Part` model. Documents can store an optional PDF, and the app is configured to keep uploaded files in the local `media/` directory outside the repository.

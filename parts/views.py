@@ -154,6 +154,8 @@ def _part_secondary_sort_tuple(part):
 def _part_sort_key(part, sort_key):
     if sort_key == "type":
         return _sort_text_key(part.part_type)
+    if sort_key == "value":
+        return _sort_text_key(part.value)
     if sort_key == "description":
         return _sort_text_key(part.description)
     if sort_key == "part_no":
@@ -171,6 +173,9 @@ def _compare_parts(left, right, *, sort_key, direction="asc"):
     if sort_key == "type":
         left_value = left.part_type
         right_value = right.part_type
+    elif sort_key == "value":
+        left_value = left.value
+        right_value = right.value
     elif sort_key == "description":
         left_value = left.description
         right_value = right.description
@@ -523,6 +528,7 @@ class PartListView(ListView):
     context_object_name = "parts"
     allowed_sort_keys = {
         "type": "Typ",
+        "value": "Wert",
         "description": "Beschreibung",
         "part_no": "Teilenummer",
         "location": "Lagerort",

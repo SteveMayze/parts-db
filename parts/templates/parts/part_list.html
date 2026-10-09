@@ -47,7 +47,11 @@
             Typ{% if sort_headers.type.active %}<span aria-hidden="true"> {{ sort_headers.type.arrow }}</span>{% endif %}
           </a>
         </th>
-        <th>Wert</th>
+        <th scope="col" {% if sort_headers.value.active %}aria-sort="{{ sort_headers.value.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.value.url }}" title="{{ sort_headers.value.sort_title }}" aria-label="{{ sort_headers.value.sort_title }}">
+            Wert{% if sort_headers.value.active %}<span aria-hidden="true"> {{ sort_headers.value.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Verpackung</th>
         <th scope="col" {% if sort_headers.description.active %}aria-sort="{{ sort_headers.description.aria_sort }}"{% endif %}>
           <a href="{{ sort_headers.description.url }}" title="{{ sort_headers.description.sort_title }}" aria-label="{{ sort_headers.description.sort_title }}">

@@ -134,6 +134,46 @@ class PartListViewTests(TestCase):
         ordering = [part.pk for part in response.context["parts"]]
         self.assertEqual(ordering[:3], [self.other.pk, self.matching.pk, connector.pk])
 
+    def test_sort_by_value_ascending_and_descending(self):
+        resistor = Part.objects.create(
+            part_type="Widerstand",
+            value="10k",
+            packaging="0603",
+            description="Test resistor",
+            quantity=2,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 2",
+        )
+        capacitor = Part.objects.create(
+            part_type="Kondensator",
+            value="100nF",
+            packaging="0603",
+            description="Test capacitor",
+            quantity=3,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 3",
+        )
+        inductor = Part.objects.create(
+            part_type="Spule",
+            value="2,2µH",
+            packaging="0603",
+            description="Test inductor",
+            quantity=4,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 4",
+        )
+
+        response = self.client.get(reverse("parts:list"), {"sort": "value", "dir": "asc"})
+        ordering = [part.pk for part in response.context["parts"] if part.description in {"Test resistor", "Test capacitor", "Test inductor"}]
+        self.assertEqual(ordering, [inductor.pk, resistor.pk, capacitor.pk])
+
+        response = self.client.get(reverse("parts:list"), {"sort": "value", "dir": "desc"})
+        ordering = [part.pk for part in response.context["parts"] if part.description in {"Test resistor", "Test capacitor", "Test inductor"}]
+        self.assertEqual(ordering, [capacitor.pk, resistor.pk, inductor.pk])
+
     def test_sort_by_description_uses_casefold_and_umlauts(self):
         zener = Part.objects.create(
             part_type="Widerstand",

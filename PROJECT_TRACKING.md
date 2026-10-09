@@ -10,7 +10,15 @@ This file tracks small, test-first increments inspired by *Obey the Testing Goat
 - [x] Basic model behavior tests (`Part.full_location`)
 - [x] Search/list behavior tests (free-text + filters)
 - [x] CRUD view tests (create/edit/delete)
+- [x] Sortable parts-list headers with safe query-param sorting, active-column indicator, and natural/Unicode-aware ordering, including the `Wert` column
+- [x] Deployment hardening for the stale Caddy Cloudsmith apt source issue
 - [x] Django test command wired and passing
+
+## Recently completed
+
+- [x] Added a reusable, whitelist-based sort helper to the parts list view so sorting is safe and bookmarkable, including the `Wert` column
+- [x] Kept search text, filters and pagination state while changing sort direction or column
+- [x] Added regression tests for umlauts, natural numbers, empty values, invalid sort inputs, and active-header behavior
 
 ## Next increments
 
