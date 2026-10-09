@@ -353,6 +353,9 @@ def build_invoice_preview(invoice_data):
                 "mf_part_no": line_data.get("mf_part_no", ""),
                 "quantity": int(line_data.get("quantity", 0) or 0),
                 "unit_price": str(line_data.get("unit_price", "0.00")),
+                "gross_unit_price": str(line_data["gross_unit_price"]) if line_data.get("gross_unit_price") is not None else "",
+                "line_total_gross": str(line_data["line_total_gross"]) if line_data.get("line_total_gross") is not None else "",
+                "vat_rate": str(line_data["vat_rate"]) if line_data.get("vat_rate") is not None else "",
                 "currency": line_data.get("currency", "EUR"),
                 "status": status,
                 "status_label": status_label,
@@ -389,7 +392,10 @@ def build_invoice_preview(invoice_data):
         "duplicate_invoice": bool(duplicate_existing),
         "duplicate_imported_at": duplicate_at,
         "document_type": invoice_data.get("document_type", ""),
-        "document_total": str(invoice_data.get("net_total") or invoice_data.get("gross_total") or Decimal("0.00")),
+        "price_basis": invoice_data.get("price_basis", "net"),
+        "document_total": str(
+            invoice_data.get("document_total") or invoice_data.get("net_total") or invoice_data.get("gross_total") or Decimal("0.00")
+        ),
         "new_type_names": sorted(new_type_names),
         "lines": lines,
     }
@@ -1379,7 +1385,18 @@ def invoice_preview(request):
                         resolved_parts_by_key[key] = part
 
                     if write_purchase_lines:
-                        line_total = (Decimal(quantity) * unit_price).quantize(Decimal("0.0001"))
+                        price_is_gross = doc.get("price_basis") == "gross" and bool(line.get("gross_unit_price"))
+                        if price_is_gross:
+                            # Gespeichert wird der Bruttopreis des Belegs; Part.last_price bleibt netto.
+                            stored_unit_price = Decimal(line["gross_unit_price"])
+                            printed_total = Decimal(line["line_total_gross"]) if line.get("line_total_gross") else None
+                            if printed_total is not None and quantity == line["quantity"]:
+                                line_total = printed_total
+                            else:
+                                line_total = (Decimal(quantity) * stored_unit_price).quantize(Decimal("0.0001"))
+                        else:
+                            stored_unit_price = unit_price
+                            line_total = (Decimal(quantity) * unit_price).quantize(Decimal("0.0001"))
                         PurchaseLine.objects.create(
                             document=purchase_document,
                             position=str(index + 1),
@@ -1387,11 +1404,11 @@ def invoice_preview(request):
                             description=description,
                             manufacturer_part_no=mf_part_no,
                             quantity=Decimal(quantity),
-                            unit_price=unit_price,
+                            unit_price=stored_unit_price,
                             line_total=line_total,
                             currency=currency,
-                            price_is_net=True,
-                            price_is_derived=(doc.get("document_type") == "order_confirmation"),
+                            price_is_net=not price_is_gross,
+                            price_is_derived=price_is_gross or (doc.get("document_type") == "order_confirmation"),
                             part=part,
                             project=line_project,
                             notes="",

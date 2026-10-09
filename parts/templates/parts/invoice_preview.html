@@ -80,6 +80,7 @@
 
         <p>
           <strong>Dokument:</strong> {{ doc.invoice_no }}<br>
+          {% if doc.price_basis == "gross" %}<strong>Endbetrag (brutto):</strong> {{ doc.document_total }} EUR<br>{% endif %}
           {% if doc.reference_note %}<strong>Zusatzreferenz:</strong> {{ doc.reference_note }}<br>{% endif %}
           {% if doc.warning %}<strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}<br>{% endif %}
           {% if doc.whg_note %}<small>{{ doc.whg_note }}</small><br>{% endif %}
@@ -96,7 +97,9 @@
               <th>Lieferant</th>
               <th>Art.-Nr.</th>
               <th>Menge</th>
-              <th>Preis</th>
+              <th>Nettopreis</th>
+              <th>Bruttopreis</th>
+              <th>MwSt.</th>
               <th>Typ (Vorschlag)</th>
               <th>Wert (Vorschlag)</th>
               <th>Verpackung (Vorschlag)</th>
@@ -119,7 +122,9 @@
                   <input type="hidden" name="unit_price::{{ line.field_prefix }}" value="{{ line.unit_price }}">
                 </td>
                 <td><input type="number" name="quantity::{{ line.field_prefix }}" value="{{ line.quantity }}" /></td>
-                <td>{{ line.unit_price }} {{ line.currency }}</td>
+                <td>{{ line.unit_price }} {{ line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</td>
+                <td>{% if line.gross_unit_price %}{{ line.gross_unit_price }} {{ line.currency }}{% else %}-{% endif %}</td>
+                <td>{% if line.vat_rate %}{{ line.vat_rate }} %{% else %}-{% endif %}</td>
                 <td>
                   <input type="text" name="part_type::{{ line.field_prefix }}" value="{{ line.part_type }}" />
                   {% if line.part_type_suggested %}<small>Vorschlag: {{ line.part_type_suggested }}</small>{% endif %}

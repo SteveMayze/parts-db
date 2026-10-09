@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from .formats import canonicalise_match_value, normalise_unicode_text, parse_date, parse_decimal
@@ -42,8 +42,11 @@ class ConradInvoiceParser:
             return None
 
         quantity = int(match.group("quantity"))
-        unit_price = parse_decimal(match.group("unit_price"), locale="de")
-        total = quantity * unit_price
+        printed_unit_price = parse_decimal(match.group("unit_price"), locale="de")
+        total = parse_decimal(match.group("total"), locale="de")
+        # Conrad druckt Bruttopreise; der gedruckte Einzelpreis kann gerundet sein
+        # oder sich auf 1.000 Stück beziehen, daher Einzelpreis aus Gesamtpreis ÷ Menge.
+        unit_price = (total / Decimal(quantity)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) if quantity else printed_unit_price
 
         return {
             "supplier_part_no": match.group("supplier_part_no"),
@@ -51,9 +54,22 @@ class ConradInvoiceParser:
             "description": match.group("description").strip(),
             "quantity": quantity,
             "unit_price": unit_price,
+            "printed_unit_price": printed_unit_price,
             "total": total,
             "tax_class": match.group("tax_class"),
         }
+
+    @staticmethod
+    def _parse_tax_legend(text: str) -> dict[str, Decimal]:
+        legend = {}
+        for tax_class, rate in re.findall(r"StK\.?\s*(\d+)\s*:\s*(\d+(?:,\d+)?)\s*%", text):
+            legend[tax_class] = parse_decimal(rate, locale="de")
+        return legend
+
+    @staticmethod
+    def _find_amount(text: str, label: str) -> Decimal | None:
+        match = re.search(rf"{label}\s*[:.]?\s*(-?[0-9][0-9.,]*)", text, flags=re.IGNORECASE)
+        return parse_decimal(match.group(1), locale="de") if match else None
 
     @classmethod
     def parse_invoice_text(cls, text: str) -> dict[str, Any]:
@@ -91,21 +107,40 @@ class ConradInvoiceParser:
         if not rows:
             raise ValueError("Es konnten keine Conrad-Zeilen aus dem hochgeladenen Text gelesen werden.")
 
-        net_total = None
-        net_total_match = re.search(r"Summe\s+Nettowert\s*[:.]?\s*([0-9.,]+)", cleaned_text, flags=re.IGNORECASE)
-        if net_total_match:
-            net_total = parse_decimal(net_total_match.group(1), locale="de")
+        name = invoice_no
+        legend = cls._parse_tax_legend(cleaned_text)
+        for row in rows:
+            if row["tax_class"] not in legend:
+                raise ValueError(f"Steuerklasse {row['tax_class']} fehlt in der Legende des Belegs {name}.")
 
+        net_total = cls._find_amount(cleaned_text, r"Summe\s+Nettowert")
+        gross_total = cls._find_amount(cleaned_text, r"Summe\s+Bruttowert")
+        if gross_total is None:
+            gross_total = cls._find_amount(cleaned_text, r"Endbetrag")
+
+        warnings = []
         parsed_total = sum((line["total"] for line in rows), Decimal("0.00"))
-        warning = None
-        if net_total is not None and abs(parsed_total - net_total) > Decimal("0.01"):
-            warning = f"Gelesene Belegsumme {parsed_total:.2f} EUR weicht von der Kopf-Summe {net_total:.2f} EUR ab."
+        if gross_total is not None and parsed_total != gross_total:
+            warnings.append(
+                f"{name}: Prüfung Bruttosumme fehlgeschlagen (Summe Gesamtpreis {parsed_total:.2f} != Summe Bruttowert {gross_total:.2f})."
+            )
+
+        for row in rows:
+            rate = legend[row["tax_class"]]
+            row["net_unit_price"] = (row["unit_price"] / (Decimal(1) + rate / Decimal(100))).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            )
+            row["vat_rate"] = rate
 
         return {
             "supplier": cls.supplier,
             "document_type": "invoice",
             "invoice_no": invoice_no,
             "invoice_date": invoice_date,
+            "price_basis": "gross",
+            "net_total": net_total,
+            "gross_total": gross_total,
+            "document_total": gross_total,
             "lines": [
                 {
                     "supplier": cls.supplier,
@@ -113,10 +148,16 @@ class ConradInvoiceParser:
                     "mf_part_no": line.get("mf_part_no", ""),
                     "description": line["description"],
                     "quantity": line["quantity"],
-                    "unit_price": line["unit_price"],
+                    "unit_price": line["net_unit_price"],
+                    "gross_unit_price": line["unit_price"],
+                    "printed_unit_price_gross": line["printed_unit_price"],
+                    "line_total_gross": line["total"],
+                    "vat_rate": line["vat_rate"],
+                    "tax_class": line["tax_class"],
                     "currency": "EUR",
                 }
                 for line in rows
             ],
-            "warning": warning,
+            "warning": "\n".join(warnings),
+            "warnings": warnings,
         }
