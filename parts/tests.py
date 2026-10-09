@@ -481,7 +481,7 @@ class ReicheltParserTests(TestCase):
 
 class InvoiceImportTests(TestCase):
     def test_conrad_parser_parses_sample_invoice_lines(self):
-        sample = Path("samples/Conrad-Invoice.pdf")
+        sample = Path("samples/conrad/9732893499.pdf")
         if not sample.exists():
             self.skipTest("Conrad sample file not available")
         parsed = ConradInvoiceParser().parse_pdf(sample.read_bytes(), filename=sample.name)
