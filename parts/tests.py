@@ -116,6 +116,136 @@ class PartListViewTests(TestCase):
         self.assertNotContains(response, "ATmega328P")
         self.assertNotContains(response, "10k")
 
+    def test_sort_by_type_ascending_and_descending(self):
+        connector = Part.objects.create(
+            part_type="Connector",
+            value="HDR-20",
+            packaging="Pinheader",
+            quantity=3,
+            location_type=Part.LocationType.FOLDER,
+            location_name="Folder 3",
+            position="pocket 1",
+        )
+        response = self.client.get(reverse("parts:list"), {"sort": "type", "dir": "asc"})
+        ordering = [part.pk for part in response.context["parts"]]
+        self.assertEqual(ordering[:3], [connector.pk, self.matching.pk, self.other.pk])
+
+        response = self.client.get(reverse("parts:list"), {"sort": "type", "dir": "desc"})
+        ordering = [part.pk for part in response.context["parts"]]
+        self.assertEqual(ordering[:3], [self.other.pk, self.matching.pk, connector.pk])
+
+    def test_sort_by_description_uses_casefold_and_umlauts(self):
+        zener = Part.objects.create(
+            part_type="Widerstand",
+            value="1k",
+            packaging="0603",
+            description="Zener",
+            quantity=2,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 2",
+        )
+        aermel = Part.objects.create(
+            part_type="Widerstand",
+            value="2k",
+            packaging="0603",
+            description="ärmel",
+            quantity=3,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 3",
+        )
+        widerstand = Part.objects.create(
+            part_type="Widerstand",
+            value="3k",
+            packaging="0603",
+            description="Widerstand",
+            quantity=4,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Drawer unit A",
+            position="drawer 4",
+        )
+        response = self.client.get(reverse("parts:list"), {"sort": "description", "dir": "asc"})
+        pks = [part.pk for part in response.context["parts"] if part.description in {"ärmel", "Widerstand", "Zener"}]
+        self.assertEqual(pks, [aermel.pk, widerstand.pk, zener.pk])
+
+        response = self.client.get(reverse("parts:list"), {"sort": "description", "dir": "desc"})
+        pks = [part.pk for part in response.context["parts"] if part.description in {"ärmel", "Widerstand", "Zener"}]
+        self.assertEqual(pks, [zener.pk, widerstand.pk, aermel.pk])
+
+    def test_sort_by_location_uses_name_position_then_type(self):
+        Part.objects.create(
+            part_type="Resistor",
+            value="4.7k",
+            packaging="0805",
+            description="Test part",
+            quantity=1,
+            location_type=Part.LocationType.FOLDER,
+            location_name="Ordner 10",
+            position="Seite 12",
+        )
+        Part.objects.create(
+            part_type="Resistor",
+            value="4.7k",
+            packaging="0805",
+            description="Test part",
+            quantity=1,
+            location_type=Part.LocationType.FOLDER,
+            location_name="Ordner 2",
+            position="Seite 3",
+        )
+        Part.objects.create(
+            part_type="Resistor",
+            value="4.7k",
+            packaging="0805",
+            description="Test part",
+            quantity=1,
+            location_type=Part.LocationType.DRAWER,
+            location_name="Ordner 2",
+            position="Seite 3",
+        )
+        response = self.client.get(reverse("parts:list"), {"sort": "location", "dir": "asc"})
+        locations = [part.full_location for part in response.context["parts"]]
+        self.assertTrue(locations.index("Mappe / Ordner 2 / Seite 3") < locations.index("Mappe / Ordner 10 / Seite 12"))
+        self.assertTrue(locations.index("Mappe / Ordner 2 / Seite 3") < locations.index("Schublade / Ordner 2 / Seite 3"))
+
+    def test_empty_values_are_last_in_both_directions(self):
+        empty = Part.objects.create(
+            part_type="Resistor",
+            value="4.7k",
+            packaging="0805",
+            description="",
+            quantity=1,
+            location_type=Part.LocationType.FOLDER,
+            location_name="Folder 9",
+            position="pocket 1",
+        )
+        response = self.client.get(reverse("parts:list"), {"sort": "description", "dir": "asc"})
+        self.assertEqual(response.context["parts"][-1].pk, empty.pk)
+
+        response = self.client.get(reverse("parts:list"), {"sort": "description", "dir": "desc"})
+        self.assertEqual(response.context["parts"][-1].pk, empty.pk)
+
+    def test_header_links_preserve_search_filters_and_reset_page_number(self):
+        response = self.client.get(
+            reverse("parts:list"),
+            {"q": "stm32", "part_type": "IC", "packaging": "LQFP-48", "page": "4", "sort": "type", "dir": "asc"},
+        )
+        html = response.content.decode()
+        self.assertIn("q=stm32", html)
+        self.assertIn("part_type=IC", html)
+        self.assertIn("packaging=LQFP-48", html)
+        self.assertIn("page=1", html)
+        self.assertEqual(html.count('aria-sort="ascending"'), 1)
+        self.assertEqual(html.count("▲"), 1)
+        self.assertFalse("aria-sort=\"descending\"" in html)
+
+    def test_invalid_sort_and_dir_fall_back_safely(self):
+        response = self.client.get(reverse("parts:list"), {"sort": "unknown", "dir": "invalid"})
+        ordering = [part.pk for part in response.context["parts"]]
+        expected = [part.pk for part in Part.objects.order_by("part_type", "value", "packaging", "location_name")]
+        self.assertEqual(ordering, expected)
+
 
 class PartCrudViewTests(TestCase):
     def setUp(self):

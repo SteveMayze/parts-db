@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import re
 import csv
+import unicodedata
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timedelta
 from decimal import Decimal
+from functools import cmp_to_key
 
 from django.contrib import messages
 from django.conf import settings
@@ -84,6 +86,150 @@ def _resolve_project_selection(raw_value, fallback=None):
 
 def _canonicalise_search(value):
     return canonicalise_match_value(value)
+
+
+def _sort_text_key(value):
+    text = unicodedata.normalize("NFC", str(value or "")).casefold().replace("µ", "u").replace("μ", "u")
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    parts = []
+    for chunk in re.split(r"(\d+)", text):
+        if not chunk:
+            continue
+        if chunk.isdigit():
+            parts.append((0, int(chunk)))
+        else:
+            parts.append((1, chunk))
+    return tuple(parts)
+
+
+def _empty_last_compare(left, right):
+    left_empty = left in (None, "")
+    right_empty = right in (None, "")
+    if left_empty and right_empty:
+        return 0
+    if left_empty:
+        return 1
+    if right_empty:
+        return -1
+    if left < right:
+        return -1
+    if left > right:
+        return 1
+    return 0
+
+
+def _compare_part_sort_values(left, right, *, direction="asc"):
+    left_value = left
+    right_value = right
+    left_is_empty = left_value in (None, "")
+    right_is_empty = right_value in (None, "")
+    if left_is_empty and right_is_empty:
+        return 0
+    if left_is_empty:
+        return 1
+    if right_is_empty:
+        return -1
+
+    left_key = _sort_text_key(left_value)
+    right_key = _sort_text_key(right_value)
+    if left_key < right_key:
+        result = -1
+    elif left_key > right_key:
+        result = 1
+    else:
+        result = 0
+    return -result if direction == "desc" else result
+
+
+def _part_secondary_sort_tuple(part):
+    return (
+        _sort_text_key(part.part_type),
+        _sort_text_key(part.value),
+        _sort_text_key(part.packaging),
+        part.pk,
+    )
+
+
+def _part_sort_key(part, sort_key):
+    if sort_key == "type":
+        return _sort_text_key(part.part_type)
+    if sort_key == "description":
+        return _sort_text_key(part.description)
+    if sort_key == "part_no":
+        return _sort_text_key(part.mf_part_no)
+    if sort_key == "location":
+        return (
+            _sort_text_key(part.location_name),
+            _sort_text_key(part.position),
+            _sort_text_key(part.get_location_type_display()),
+        )
+    return ()
+
+
+def _compare_parts(left, right, *, sort_key, direction="asc"):
+    if sort_key == "type":
+        left_value = left.part_type
+        right_value = right.part_type
+    elif sort_key == "description":
+        left_value = left.description
+        right_value = right.description
+    elif sort_key == "part_no":
+        left_value = left.mf_part_no
+        right_value = right.mf_part_no
+    elif sort_key == "location":
+        left_value = (left.location_name, left.position, left.get_location_type_display())
+        right_value = (right.location_name, right.position, right.get_location_type_display())
+        if left_value == right_value:
+            return _compare_part_secondary_sort(left, right)
+        left_value_key = tuple(_sort_text_key(item) for item in left_value)
+        right_value_key = tuple(_sort_text_key(item) for item in right_value)
+        if left_value_key < right_value_key:
+            result = -1
+        elif left_value_key > right_value_key:
+            result = 1
+        else:
+            result = 0
+        if direction == "desc":
+            result *= -1
+        if result == 0:
+            return _compare_part_secondary_sort(left, right)
+        return result
+    else:
+        return 0
+
+    left_is_empty = left_value in (None, "")
+    right_is_empty = right_value in (None, "")
+    if left_is_empty and right_is_empty:
+        return _compare_part_secondary_sort(left, right)
+    if left_is_empty:
+        return 1
+    if right_is_empty:
+        return -1
+
+    left_key = _sort_text_key(left_value)
+    right_key = _sort_text_key(right_value)
+    if left_key < right_key:
+        result = -1
+    elif left_key > right_key:
+        result = 1
+    else:
+        result = 0
+    if direction == "desc":
+        result *= -1
+    if result == 0:
+        return _compare_part_secondary_sort(left, right)
+    return result
+
+
+def _compare_part_secondary_sort(left, right):
+    left_key = _part_secondary_sort_tuple(left)
+    right_key = _part_secondary_sort_tuple(right)
+    if left_key < right_key:
+        return -1
+    if left_key > right_key:
+        return 1
+    return 0
 
 
 def _serialise_preview_date(value):
@@ -375,6 +521,12 @@ class PartListView(ListView):
     model = Part
     template_name = "parts/part_list.html"
     context_object_name = "parts"
+    allowed_sort_keys = {
+        "type": "Typ",
+        "description": "Beschreibung",
+        "part_no": "Teilenummer",
+        "location": "Lagerort",
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -405,7 +557,19 @@ class PartListView(ListView):
             queryset = queryset.filter(part_type__iexact=part_type)
         if packaging:
             queryset = queryset.filter(packaging__iexact=packaging)
+
+        sort_key = self.request.GET.get("sort", "").strip()
+        direction = self.request.GET.get("dir", "asc").strip().lower()
+        if sort_key in self.allowed_sort_keys and direction in {"asc", "desc"}:
+            queryset = sorted(queryset, key=cmp_to_key(lambda left, right: _compare_parts(left, right, sort_key=sort_key, direction=direction)))
         return queryset
+
+    def _header_url(self, sort_key, direction):
+        params = self.request.GET.copy()
+        params["sort"] = sort_key
+        params["dir"] = direction
+        params["page"] = "1"
+        return "?{}".format(params.urlencode())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -418,6 +582,37 @@ class PartListView(ListView):
         context["packaging_options"] = (
             Part.objects.exclude(packaging="").order_by("packaging").values_list("packaging", flat=True).distinct()
         )
+
+        current_sort = self.request.GET.get("sort", "").strip()
+        current_dir = self.request.GET.get("dir", "asc").strip().lower()
+        if current_sort not in self.allowed_sort_keys or current_dir not in {"asc", "desc"}:
+            current_sort = ""
+            current_dir = "asc"
+
+        columns = []
+        for key, label in self.allowed_sort_keys.items():
+            is_active = current_sort == key
+            direction = "asc"
+            if is_active and current_dir == "asc":
+                direction = "desc"
+            elif is_active:
+                direction = "asc"
+            arrow = "▲" if is_active and current_dir == "asc" else "▼" if is_active else ""
+            columns.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "url": self._header_url(key, direction if is_active else "asc"),
+                    "active": is_active,
+                    "aria_sort": "ascending" if is_active and current_dir == "asc" else "descending" if is_active else None,
+                    "arrow": arrow,
+                    "sort_title": f"Nach {label} sortieren",
+                }
+            )
+        context["sortable_columns"] = columns
+        context["sort_headers"] = {column["key"]: column for column in columns}
+        context["current_sort"] = current_sort
+        context["current_dir"] = current_dir
         return context
 
 

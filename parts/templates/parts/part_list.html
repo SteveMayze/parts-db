@@ -42,14 +42,30 @@
   <table>
     <thead>
       <tr>
-        <th>Typ</th>
+        <th scope="col" {% if sort_headers.type.active %}aria-sort="{{ sort_headers.type.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.type.url }}" title="{{ sort_headers.type.sort_title }}" aria-label="{{ sort_headers.type.sort_title }}">
+            Typ{% if sort_headers.type.active %}<span aria-hidden="true"> {{ sort_headers.type.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Wert</th>
         <th>Verpackung</th>
-        <th>Beschreibung</th>
+        <th scope="col" {% if sort_headers.description.active %}aria-sort="{{ sort_headers.description.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.description.url }}" title="{{ sort_headers.description.sort_title }}" aria-label="{{ sort_headers.description.sort_title }}">
+            Beschreibung{% if sort_headers.description.active %}<span aria-hidden="true"> {{ sort_headers.description.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Hersteller</th>
-        <th>Teilenummer</th>
+        <th scope="col" {% if sort_headers.part_no.active %}aria-sort="{{ sort_headers.part_no.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.part_no.url }}" title="{{ sort_headers.part_no.sort_title }}" aria-label="{{ sort_headers.part_no.sort_title }}">
+            Teilenummer{% if sort_headers.part_no.active %}<span aria-hidden="true"> {{ sort_headers.part_no.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Menge</th>
-        <th>Lagerort</th>
+        <th scope="col" {% if sort_headers.location.active %}aria-sort="{{ sort_headers.location.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.location.url }}" title="{{ sort_headers.location.sort_title }}" aria-label="{{ sort_headers.location.sort_title }}">
+            Lagerort{% if sort_headers.location.active %}<span aria-hidden="true"> {{ sort_headers.location.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Aktionen</th>
       </tr>
     </thead>
