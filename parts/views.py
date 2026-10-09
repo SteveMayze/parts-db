@@ -1168,6 +1168,38 @@ def invoice_upload(request):
     return render(request, "parts/invoice_upload.html", {"form": form})
 
 
+def _existing_classification_values() -> dict[str, list[str]]:
+    return {
+        "part_type": list(Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct()),
+        "packaging": list(Part.objects.exclude(packaging="").values_list("packaging", flat=True).distinct()),
+    }
+
+
+def _reuse_spelling(value: str, existing_values) -> str:
+    """Use the existing spelling when a value differs only by case, spacing or umlaut form."""
+    cleaned = " ".join(normalise_unicode_text(value).split())
+    key = canonicalise_match_value(cleaned)
+    for existing in existing_values:
+        if canonicalise_match_value(existing) == key:
+            return existing
+    return cleaned
+
+
+def _correct_part_classification(part, part_type, value, packaging, existing_types):
+    """Corrections typed in the preview for a matched part; a blank entry never clears a value."""
+    changed = []
+    for field, new_value, known in (
+        ("part_type", _reuse_spelling(part_type, existing_types["part_type"]), existing_types["part_type"]),
+        ("value", " ".join(normalise_unicode_text(value).split()), ()),
+        ("packaging", _reuse_spelling(packaging, existing_types["packaging"]), existing_types["packaging"]),
+    ):
+        if new_value and new_value != getattr(part, field):
+            setattr(part, field, new_value)
+            changed.append(field)
+    if changed:
+        part.save(update_fields=changed + ["updated_at"])
+
+
 def _apply_line_to_part(part, quantity, unit_price, supplier, supplier_part_no, description, mf_part_no, currency, document_date, document_no, quantity_mode):
     should_add_quantity = quantity_mode == QUANTITY_MODE_ADD
     if should_add_quantity:
@@ -1252,6 +1284,21 @@ def _create_purchase_document(doc, supplier):
     return purchase_document
 
 
+def _preview_context(payload):
+    existing = _existing_classification_values()
+    return {
+        "preview": payload,
+        "quantity_mode_choices": [
+            (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
+            (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
+        ],
+        "active_projects": Project.objects.filter(active=True).order_by("name"),
+        "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
+        "known_part_types": sorted(existing["part_type"], key=str.casefold),
+        "known_packagings": sorted(existing["packaging"], key=str.casefold),
+    }
+
+
 def invoice_preview(request):
     payload = _get_valid_preview_payload(request)
     if not payload:
@@ -1269,20 +1316,9 @@ def invoice_preview(request):
             payload["quantity_mode"] = quantity_mode
             payload["project_id"] = batch_project_id
             request.session["invoice_preview_batch"] = payload
-            return render(
-                request,
-                "parts/invoice_preview.html",
-                {
-                    "preview": payload,
-                    "quantity_mode_choices": [
-                        (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
-                        (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
-                    ],
-                    "active_projects": Project.objects.filter(active=True).order_by("name"),
-                    "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
-                },
-            )
+            return render(request, "parts/invoice_preview.html", _preview_context(payload))
 
+        existing_types = _existing_classification_values()
         include_known_duplicates = request.POST.get("include_known_duplicates") == "yes"
         documents = payload.get("documents", [])
         resolved_parts_by_key = {}
@@ -1332,7 +1368,7 @@ def invoice_preview(request):
                     selected_match = request.POST.get(f"match::{field_prefix}")
                     quantity = int(request.POST.get(f"quantity::{field_prefix}", line["quantity"]) or 0)
                     unit_price = Decimal(request.POST.get(f"unit_price::{field_prefix}", line["unit_price"]) or "0")
-                    line_supplier = request.POST.get(f"supplier::{field_prefix}", line["supplier"]).strip()
+                    line_supplier = (line.get("supplier") or supplier).strip()
                     supplier_part_no = request.POST.get(f"supplier_part_no::{field_prefix}", line["supplier_part_no"]).strip()
                     description = request.POST.get(f"description::{field_prefix}", line["description"]).strip()
                     mf_part_no = (request.POST.get(f"mf_part_no::{field_prefix}", line["mf_part_no"]) or "").strip()
@@ -1370,6 +1406,7 @@ def invoice_preview(request):
                             document_no=document_no,
                             quantity_mode=quantity_mode,
                         )
+                        _correct_part_classification(part, part_type, value, packaging, existing_types)
                     else:
                         part = _create_new_part(
                             quantity=quantity,
@@ -1382,9 +1419,9 @@ def invoice_preview(request):
                             document_date=document_date,
                             document_no=document_no,
                             quantity_mode=quantity_mode,
-                            part_type=part_type,
+                            part_type=_reuse_spelling(part_type, existing_types["part_type"]),
                             value=value,
-                            packaging=packaging,
+                            packaging=_reuse_spelling(packaging, existing_types["packaging"]),
                         )
                     if supplier_part_no:
                         resolved_parts_by_key[key] = part
@@ -1406,7 +1443,7 @@ def invoice_preview(request):
                             document=purchase_document,
                             position=str(index + 1),
                             supplier_part_no=supplier_part_no,
-                            description=description,
+                            description=line["description"],
                             manufacturer_part_no=mf_part_no,
                             quantity=Decimal(quantity),
                             unit_price=stored_unit_price,
@@ -1440,19 +1477,7 @@ def invoice_preview(request):
         messages.success(request, "Import abgeschlossen.")
         return redirect("parts:list")
 
-    return render(
-        request,
-        "parts/invoice_preview.html",
-        {
-            "preview": payload,
-            "quantity_mode_choices": [
-                (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
-                (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
-            ],
-            "active_projects": Project.objects.filter(active=True).order_by("name"),
-            "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
-        },
-    )
+    return render(request, "parts/invoice_preview.html", _preview_context(payload))
 
 
 def parts_complete_preview(request):

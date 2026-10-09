@@ -291,7 +291,7 @@ class SplitDeliveryBatchTests(TestCase):
     def test_preview_shows_layout_notes_discount_in_german(self):
         import_parsed(self.client, [parse(split_doc_2of2(), "a.pdf"), parse(discount_doc(), "b.pdf")])
         response = self.client.get(reverse("parts:invoice_preview"))
-        self.assertContains(response, "Erkanntes Layout:")
+        self.assertContains(response, "Erkanntes Layout")
         self.assertContains(response, "Teillieferung 2/2")
         self.assertContains(response, "separat geliefert: 68 × 747842")
         self.assertContains(response, "Rabatt (brutto")

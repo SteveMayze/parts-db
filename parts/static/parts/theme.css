@@ -107,3 +107,122 @@ thead th {
 .toolbar {
   margin-bottom: 0.8rem;
 }
+
+/* Importvorschau: ein Block je Zeile */
+.import-summary .badge,
+.import-line .badge {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: bold;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+
+.import-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5rem;
+  align-items: flex-end;
+}
+
+.import-document {
+  margin: 1rem 0;
+}
+
+.import-document > summary {
+  cursor: pointer;
+  padding: 0.3rem 0;
+}
+
+.doc-header {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.4rem 1rem;
+  margin: 0.6rem 0;
+}
+
+.doc-header dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.doc-header dd {
+  margin: 0;
+  font-weight: bold;
+  overflow-wrap: anywhere;
+}
+
+.import-line {
+  border: 1px solid var(--border);
+  border-left-width: 6px;
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 0.5rem 0.7rem 0.7rem;
+  margin: 0.6rem 0;
+}
+
+.import-line.status-new { border-left-color: #16a34a; }
+.import-line.status-matched { border-left-color: #2563eb; }
+.import-line.status-needs_review { border-left-color: var(--accent); }
+.badge.status-new { background: #dcfce7; }
+.badge.status-matched { background: #dbeafe; }
+.badge.status-needs_review { background: #ffedd5; }
+
+.line-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.2rem;
+  align-items: baseline;
+}
+
+.line-facts label.inline,
+.line-fields label.inline {
+  margin-top: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.import-line input,
+.import-line select,
+.import-line textarea {
+  max-width: none;
+}
+
+.import-line input.narrow {
+  width: 5.5rem;
+}
+
+.import-line input[type="checkbox"] {
+  width: auto;
+}
+
+.line-description textarea {
+  display: block;
+  width: 100%;
+  min-height: 3.4rem;
+  resize: vertical;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  field-sizing: content;
+}
+
+.line-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.2rem 0.9rem;
+  align-items: end;
+}
+
+.line-fields label {
+  display: block;
+}
+
+.line-fields .match-name {
+  display: block;
+  font-weight: normal;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}

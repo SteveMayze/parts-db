@@ -2,10 +2,13 @@
 {% block title %}Importvorschau{% endblock %}
 {% block content %}
   <h1>Importvorschau</h1>
-  <p>
-    <strong>Lieferant:</strong> {{ preview.supplier }}<br>
-    <strong>Dokumente:</strong> {{ preview.summary.documents }}<br>
-    <strong>Zeilen:</strong> {{ preview.summary.lines }} (Treffer {{ preview.summary.matched }}, Neu {{ preview.summary.new }}, Prüfen {{ preview.summary.needs_review }})
+  <p class="import-summary">
+    <strong>Lieferant:</strong> {{ preview.supplier }} ·
+    <strong>Dokumente:</strong> {{ preview.summary.documents }} ·
+    <strong>Zeilen:</strong> {{ preview.summary.lines }}
+    (<span class="badge status-matched">Treffer {{ preview.summary.matched }}</span>
+    <span class="badge status-new">Neu {{ preview.summary.new }}</span>
+    <span class="badge status-needs_review">Prüfen {{ preview.summary.needs_review }}</span>)
   </p>
 
   {% if preview.failed_files %}
@@ -34,26 +37,32 @@
     <p><strong>Neue Typnamen in diesem Import:</strong> {{ preview.new_type_names|join:", " }}</p>
   {% endif %}
 
+  <datalist id="known-part-types">{% for name in known_part_types %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+  <datalist id="known-packagings">{% for name in known_packagings %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+
   <form method="post">
     {% csrf_token %}
 
-    <label for="quantity_mode"><strong>Mengenmodus:</strong></label>
-    <select id="quantity_mode" name="quantity_mode">
-      {% for value, label in quantity_mode_choices %}
-        <option value="{{ value }}" {% if preview.quantity_mode == value %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-    <br>
-    <label for="batch_project_id"><strong>Projekt (für alle Zeilen, optional):</strong></label>
-    <select id="batch_project_id" name="batch_project_id">
-      <option value="">kein Projekt</option>
-      {% for project in active_projects %}
-        <option value="{{ project.pk }}" {% if preview.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
-          {{ project.name }}
-        </option>
-      {% endfor %}
-    </select>
-    <a href="{{ project_new_link }}">Neues Projekt …</a>
+    <div class="import-options">
+      <label>Mengenmodus
+        <select name="quantity_mode">
+          {% for value, label in quantity_mode_choices %}
+            <option value="{{ value }}" {% if preview.quantity_mode == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Projekt (für alle Zeilen, optional)
+        <select name="batch_project_id">
+          <option value="">kein Projekt</option>
+          {% for project in active_projects %}
+            <option value="{{ project.pk }}" {% if preview.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
+              {{ project.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <a href="{{ project_new_link }}">Neues Projekt …</a>
+    </div>
 
     {% if preview.failed_files %}
       <p>
@@ -72,111 +81,120 @@
     </p>
 
     {% for doc in preview.documents %}
-      <details open>
+      <details open class="import-document">
         <summary>
           <strong>{{ doc.file_name }}</strong> — {{ doc.invoice_no }} — {{ doc.invoice_date }} —
           Treffer {{ doc.counts.matched }}, Neu {{ doc.counts.new }}, Prüfen {{ doc.counts.needs_review }}
         </summary>
 
-        <p>
-          <strong>Dokument:</strong> {{ doc.invoice_no }}<br>
-          {% if doc.layout %}<strong>Erkanntes Layout:</strong> {{ doc.layout }}<br>{% endif %}
-          {% if doc.price_basis == "gross" %}<strong>Endbetrag (brutto):</strong> {{ doc.document_total }} EUR<br>{% endif %}
-          {% if doc.discount_total != "0.00" and doc.discount_total != "0" %}<strong>Rabatt (brutto, nicht auf Zeilen verteilt):</strong> {{ doc.discount_total }} EUR<br>{% endif %}
-          {% if doc.notes %}
-            <strong>Hinweise:</strong>
-            <ul>{% for note in doc.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+        <dl class="doc-header">
+          <div><dt>Datei</dt><dd>{{ doc.file_name }}</dd></div>
+          <div><dt>Lieferant</dt><dd>{{ doc.supplier }}</dd></div>
+          <div><dt>Belegnummer</dt><dd>{{ doc.invoice_no }}</dd></div>
+          {% if doc.layout %}<div><dt>Erkanntes Layout</dt><dd>{{ doc.layout }}</dd></div>{% endif %}
+          <div><dt>Belegdatum</dt><dd>{{ doc.invoice_date }}</dd></div>
+          <div>
+            <dt>{% if doc.price_basis == "gross" %}Endbetrag (brutto){% else %}Belegsumme (netto){% endif %}</dt>
+            <dd>{{ doc.document_total }} EUR</dd>
+          </div>
+          {% if doc.discount_total != "0.00" and doc.discount_total != "0" %}
+            <div><dt>Rabatt (brutto, nicht auf Zeilen verteilt)</dt><dd>{{ doc.discount_total }} EUR</dd></div>
           {% endif %}
-          {% if doc.reference_note %}<strong>Zusatzreferenz:</strong> {{ doc.reference_note }}<br>{% endif %}
-          {% if doc.warning %}<strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}<br>{% endif %}
-          {% if doc.whg_note %}<small>{{ doc.whg_note }}</small><br>{% endif %}
-          {% if doc.duplicate_invoice %}
-            <span class="warning">Schon importiert am {{ doc.duplicate_imported_at }}</span><br>
-          {% endif %}
-        </p>
+          {% if doc.reference_note %}<div><dt>Zusatzreferenz</dt><dd>{{ doc.reference_note }}</dd></div>{% endif %}
+        </dl>
+        {% if doc.notes %}
+          <p><strong>Hinweise:</strong></p>
+          <ul>{% for note in doc.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if doc.warning %}<p class="warning"><strong>Warnung:</strong> {{ doc.warning|linebreaksbr }}</p>{% endif %}
+        {% if doc.whg_note %}<p><small>{{ doc.whg_note }}</small></p>{% endif %}
+        {% if doc.duplicate_invoice %}
+          <p class="warning">Schon importiert am {{ doc.duplicate_imported_at }}</p>
+        {% endif %}
 
-        <table>
-          <thead>
-            <tr>
-              <th>Zeile</th>
-              <th>Artikel</th>
-              <th>Lieferant</th>
-              <th>Art.-Nr.</th>
-              <th>Menge</th>
-              <th>Nettopreis</th>
-              <th>Bruttopreis</th>
-              <th>MwSt.</th>
-              <th>Typ (Vorschlag)</th>
-              <th>Wert (Vorschlag)</th>
-              <th>Verpackung (Vorschlag)</th>
-              <th>Status</th>
-              <th>Projekt</th>
-              <th>Treffer</th>
-              <th>Überspringen</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for line in doc.lines %}
-              <tr>
-                <td>{{ forloop.counter }}</td>
-                <td><input type="text" name="description::{{ line.field_prefix }}" value="{{ line.description }}" /></td>
-                <td><input type="text" name="supplier::{{ line.field_prefix }}" value="{{ line.supplier }}" /></td>
-                <td>
-                  <input type="text" name="supplier_part_no::{{ line.field_prefix }}" value="{{ line.supplier_part_no }}" />
-                  <input type="hidden" name="mf_part_no::{{ line.field_prefix }}" value="{{ line.mf_part_no|default:'' }}">
-                  <input type="hidden" name="currency::{{ line.field_prefix }}" value="{{ line.currency|default:'EUR' }}">
-                  <input type="hidden" name="unit_price::{{ line.field_prefix }}" value="{{ line.unit_price }}">
-                </td>
-                <td><input type="number" name="quantity::{{ line.field_prefix }}" value="{{ line.quantity }}" /></td>
-                <td>{{ line.unit_price }} {{ line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</td>
-                <td>{% if line.gross_unit_price %}{{ line.gross_unit_price }} {{ line.currency }}{% else %}-{% endif %}</td>
-                <td>{% if line.vat_rate %}{{ line.vat_rate }} %{% else %}-{% endif %}</td>
-                <td>
-                  <input type="text" name="part_type::{{ line.field_prefix }}" value="{{ line.part_type }}" />
-                  {% if line.part_type_suggested %}<small>Vorschlag: {{ line.part_type_suggested }}</small>{% endif %}
-                </td>
-                <td>
-                  <input type="text" name="value::{{ line.field_prefix }}" value="{{ line.value }}" />
-                  {% if line.value_suggested %}<small>Vorschlag: {{ line.value_suggested }}</small>{% endif %}
-                </td>
-                <td>
-                  <input type="text" name="packaging::{{ line.field_prefix }}" value="{{ line.packaging }}" />
-                  {% if line.packaging_suggested %}<small>Vorschlag: {{ line.packaging_suggested }}</small>{% endif %}
-                </td>
-                <td>{{ line.status_label }}</td>
-                <td>
-                  <select name="project::{{ line.field_prefix }}">
-                    <option value="">Batch-Vorgabe verwenden</option>
-                    <option value="__none__">kein Projekt</option>
-                    {% for project in active_projects %}
-                      <option value="{{ project.pk }}" {% if line.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
-                        {{ project.name }}
-                      </option>
+        {% for line in doc.lines %}
+          <section class="import-line status-{{ line.status }}">
+            <div class="line-facts">
+              <span><strong>Zeile</strong> {{ forloop.counter }}</span>
+              <span><strong>Art.-Nr.</strong> {{ line.supplier_part_no }}</span>
+              <label class="inline">Menge
+                <input type="number" min="0" class="narrow" name="quantity::{{ line.field_prefix }}" value="{{ line.quantity }}">
+              </label>
+              <span><strong>Nettopreis</strong> {{ line.unit_price }} {{ line.currency }}{% if doc.price_basis == "gross" %} <small>(abgeleitet)</small>{% endif %}</span>
+              <span><strong>Bruttopreis</strong> {% if line.gross_unit_price %}{{ line.gross_unit_price }} {{ line.currency }}{% else %}-{% endif %}</span>
+              <span><strong>MwSt.</strong> {% if line.vat_rate %}{{ line.vat_rate }} %{% else %}-{% endif %}</span>
+              <span class="badge status-{{ line.status }}">{{ line.status_label }}</span>
+            </div>
+
+            <div class="line-description">
+              <label>Beschreibung (wie gedruckt; bearbeitet nur für neue Bauteile)
+                <textarea name="description::{{ line.field_prefix }}" rows="2" data-autogrow>{{ line.description }}</textarea>
+              </label>
+            </div>
+
+            <div class="line-fields">
+              <label>Typ{% if line.part_type_suggested %} <small>(Vorschlag: {{ line.part_type_suggested }})</small>{% endif %}
+                <input type="text" list="known-part-types" name="part_type::{{ line.field_prefix }}" value="{{ line.part_type }}">
+              </label>
+              <label>Wert{% if line.value_suggested %} <small>(Vorschlag: {{ line.value_suggested }})</small>{% endif %}
+                <input type="text" name="value::{{ line.field_prefix }}" value="{{ line.value }}">
+              </label>
+              <label>Verpackung{% if line.packaging_suggested %} <small>(Vorschlag: {{ line.packaging_suggested }})</small>{% endif %}
+                <input type="text" list="known-packagings" name="packaging::{{ line.field_prefix }}" value="{{ line.packaging }}">
+              </label>
+              <label>Projekt
+                <select name="project::{{ line.field_prefix }}">
+                  <option value="">Batch-Vorgabe verwenden</option>
+                  <option value="__none__">kein Projekt</option>
+                  {% for project in active_projects %}
+                    <option value="{{ project.pk }}" {% if line.project_id == project.pk|stringformat:"s" %}selected{% endif %}>
+                      {{ project.name }}
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="match">Treffer
+                {% if line.part %}
+                  <span class="match-name">{{ line.part.label }}</span>
+                  <select name="match::{{ line.field_prefix }}">
+                    <option value="{{ line.part.pk }}" selected>{{ line.part.label }}</option>
+                  </select>
+                {% else %}
+                  <select name="match::{{ line.field_prefix }}">
+                    <option value="">Neu anlegen</option>
+                    {% for candidate in line.candidates %}
+                      <option value="{{ candidate.pk }}">{{ candidate.label }}</option>
                     {% endfor %}
                   </select>
-                </td>
-                <td>
-                  {% if line.part %}
-                    <select name="match::{{ line.field_prefix }}">
-                      <option value="{{ line.part.pk }}" selected>{{ line.part.label }}</option>
-                    </select>
-                  {% else %}
-                    <select name="match::{{ line.field_prefix }}">
-                      <option value="">Neu anlegen</option>
-                      {% for candidate in line.candidates %}
-                        <option value="{{ candidate.pk }}">{{ candidate.label }}</option>
-                      {% endfor %}
-                    </select>
-                  {% endif %}
-                </td>
-                <td><input type="checkbox" name="skip::{{ line.field_prefix }}"></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+                {% endif %}
+              </label>
+              <label class="inline skip">
+                <input type="checkbox" name="skip::{{ line.field_prefix }}"> Überspringen
+              </label>
+            </div>
+          </section>
+        {% endfor %}
       </details>
     {% endfor %}
 
     <button type="submit">Import bestätigen</button>
   </form>
+
+  <script>
+    (function () {
+      function grow(area) {
+        area.style.height = "auto";
+        area.style.height = area.scrollHeight + 2 + "px";
+      }
+      document.querySelectorAll("textarea[data-autogrow]").forEach(function (area) {
+        grow(area);
+        area.addEventListener("input", function () { grow(area); });
+      });
+      document.querySelectorAll("details.import-document").forEach(function (details) {
+        details.addEventListener("toggle", function () {
+          details.querySelectorAll("textarea[data-autogrow]").forEach(grow);
+        });
+      });
+    })();
+  </script>
 {% endblock %}
