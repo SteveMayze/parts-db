@@ -26,6 +26,7 @@ class PartForm(forms.ModelForm):
         model = Part
         fields = [
             "part_type",
+            "part_subtype",
             "value",
             "packaging",
             "description",
@@ -45,6 +46,8 @@ class PartForm(forms.ModelForm):
         ]
         localized_fields = ("last_price",)
         widgets = {
+            "part_type": forms.TextInput(attrs={"list": "known-part-types", "autocomplete": "off"}),
+            "part_subtype": forms.TextInput(attrs={"list": "known-part-subtypes", "autocomplete": "off"}),
             "last_purchased": forms.DateInput(format="%d.%m.%Y", attrs={"placeholder": "TT.MM.JJJJ"}),
         }
 

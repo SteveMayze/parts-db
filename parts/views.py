@@ -333,6 +333,29 @@ def _get_existing_part_types() -> list[str]:
     return list(Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct())
 
 
+def _classification_suggestions() -> dict:
+    """Distinct type/subtype values already in use, for <datalist> autocomplete.
+
+    ``subtypes_by_type`` maps the casefolded type to the subtypes used with it, so the
+    form can narrow the subtype suggestions once a type is entered.
+    """
+    pairs = Part.objects.values_list("part_type", "part_subtype").distinct()
+    types = set()
+    subtypes = set()
+    by_type: dict[str, set[str]] = {}
+    for part_type, part_subtype in pairs:
+        if part_type:
+            types.add(part_type)
+        if part_subtype:
+            subtypes.add(part_subtype)
+            by_type.setdefault(part_type.casefold(), set()).add(part_subtype)
+    return {
+        "known_part_types": sorted(types, key=str.casefold),
+        "known_part_subtypes": sorted(subtypes, key=str.casefold),
+        "subtypes_by_type": {key: sorted(values, key=str.casefold) for key, values in by_type.items()},
+    }
+
+
 def build_invoice_preview(invoice_data):
     existing_part_types = _get_existing_part_types()
     new_type_names: set[str] = set()
@@ -642,14 +665,21 @@ class PartListView(ListView):
         return context
 
 
-class PartCreateView(CreateView):
+class PartFormContextMixin:
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(_classification_suggestions())
+        return context
+
+
+class PartCreateView(PartFormContextMixin, CreateView):
     model = Part
     form_class = PartForm
     template_name = "parts/part_form.html"
     success_url = reverse_lazy("parts:list")
 
 
-class PartUpdateView(UpdateView):
+class PartUpdateView(PartFormContextMixin, UpdateView):
     model = Part
     form_class = PartForm
     template_name = "parts/part_form.html"

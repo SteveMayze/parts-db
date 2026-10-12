@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
+from django.urls import reverse
 
 from .models import Part
 
@@ -58,3 +59,52 @@ class PartSubtypeMigrationTests(TransactionTestCase):
         executor.migrate(self.migrate_from)
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+class PartSubtypeFormTests(TestCase):
+    def setUp(self):
+        Part.objects.create(part_type="Diode", part_subtype="Zener", value="5V1")
+        Part.objects.create(part_type="Diode", part_subtype="TVS", value="SMBJ5.0")
+        Part.objects.create(part_type="LED", value="rot")
+
+    def _payload(self, **extra):
+        data = {
+            "part_type": "Diode",
+            "part_subtype": "Photodiode",
+            "value": "BPW34",
+            "quantity": "3",
+            "currency": "EUR",
+            "last_price": "0,00",
+        }
+        data.update(extra)
+        return data
+
+    def test_form_accepts_missing_subtype(self):
+        from .forms import PartForm
+
+        data = self._payload()
+        del data["part_subtype"]
+        form = PartForm(data)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["part_subtype"], "")
+
+    def test_create_with_subtype_strips_whitespace(self):
+        response = self.client.post(reverse("parts:add"), self._payload(part_subtype="  Photodiode "))
+        self.assertRedirects(response, reverse("parts:list"))
+        self.assertTrue(Part.objects.filter(part_type="Diode", part_subtype="Photodiode", value="BPW34").exists())
+
+    def test_update_can_set_subtype_on_existing_part(self):
+        part = Part.objects.get(part_type="LED")
+        response = self.client.post(reverse("parts:edit", args=[part.pk]), self._payload(part_type="LED", part_subtype="IR", value="rot"))
+        self.assertRedirects(response, reverse("parts:list"))
+        part.refresh_from_db()
+        self.assertEqual(part.part_subtype, "IR")
+
+    def test_form_page_offers_existing_types_and_subtypes_as_datalists(self):
+        response = self.client.get(reverse("parts:add"))
+        self.assertContains(response, 'id="known-part-types"')
+        self.assertContains(response, 'id="known-part-subtypes"')
+        self.assertContains(response, '<option value="Zener">')
+        self.assertContains(response, '<option value="TVS">')
+        self.assertEqual(response.context["subtypes_by_type"], {"diode": ["TVS", "Zener"]})
+        self.assertContains(response, 'list="known-part-subtypes"')

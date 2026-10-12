@@ -17,4 +17,29 @@
     {{ form.as_p }}
     <button type="submit">Speichern</button>
   </form>
+
+  <datalist id="known-part-types">{% for name in known_part_types %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+  <datalist id="known-part-subtypes">{% for name in known_part_subtypes %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+  {{ subtypes_by_type|json_script:"subtypes-by-type" }}
+  <script>
+    (function () {
+      var typeInput = document.getElementById("id_part_type");
+      var list = document.getElementById("known-part-subtypes");
+      var dataNode = document.getElementById("subtypes-by-type");
+      if (!typeInput || !list || !dataNode) { return; }
+      var byType = JSON.parse(dataNode.textContent);
+      var allOptions = Array.prototype.map.call(list.options, function (o) { return o.value; });
+      function refresh() {
+        var wanted = byType[typeInput.value.trim().toLowerCase()] || allOptions;
+        list.innerHTML = "";
+        wanted.forEach(function (name) {
+          var option = document.createElement("option");
+          option.value = name;
+          list.appendChild(option);
+        });
+      }
+      typeInput.addEventListener("input", refresh);
+      refresh();
+    })();
+  </script>
 {% endblock %}
