@@ -108,3 +108,51 @@ class PartSubtypeFormTests(TestCase):
         self.assertContains(response, '<option value="TVS">')
         self.assertEqual(response.context["subtypes_by_type"], {"diode": ["TVS", "Zener"]})
         self.assertContains(response, 'list="known-part-subtypes"')
+
+
+class PartSubtypeListTests(TestCase):
+    def setUp(self):
+        self.zener = Part.objects.create(part_type="Diode", part_subtype="Zener", value="BZX84-5V1")
+        self.tvs = Part.objects.create(part_type="Diode", part_subtype="TVS", value="SMBJ5.0A")
+        self.plain = Part.objects.create(part_type="Diode", value="1N4148")
+        self.led = Part.objects.create(part_type="LED", part_subtype="Zener-ähnlich", value="LED-rot")
+
+    def _list(self, **params):
+        response = self.client.get(reverse("parts:list"), params)
+        self.assertEqual(response.status_code, 200)
+        return response, list(response.context["parts"])
+
+    def test_list_shows_subtype_column_and_keeps_parts_without_subtype(self):
+        response, parts = self._list()
+        self.assertContains(response, "Untertyp")
+        self.assertIn(self.plain, parts)
+        self.assertEqual(len(parts), 4)
+
+    def test_filter_by_type_then_subtype(self):
+        _, parts = self._list(part_type="Diode", part_subtype="TVS")
+        self.assertEqual(parts, [self.tvs])
+
+    def test_subtype_filter_is_case_insensitive(self):
+        _, parts = self._list(part_type="diode", part_subtype="zener")
+        self.assertEqual(parts, [self.zener])
+
+    def test_search_matches_subtype_case_insensitively(self):
+        _, parts = self._list(q="zener")
+        self.assertCountEqual(parts, [self.zener, self.led])
+        _, parts = self._list(q="TVS")
+        self.assertEqual(parts, [self.tvs])
+
+    def test_subtype_options_follow_selected_type(self):
+        response, _ = self._list(part_type="Diode")
+        self.assertCountEqual(response.context["part_subtypes"], ["Zener", "TVS"])
+        response, _ = self._list()
+        self.assertCountEqual(response.context["part_subtypes"], ["Zener", "TVS", "Zener-ähnlich"])
+
+    def test_sort_by_type_uses_subtype_as_tie_breaker(self):
+        _, parts = self._list(sort="type", dir="asc")
+        self.assertEqual([p.pk for p in parts], [self.plain.pk, self.tvs.pk, self.zener.pk, self.led.pk])
+
+    def test_detail_page_shows_subtype(self):
+        response = self.client.get(reverse("parts:detail", args=[self.zener.pk]))
+        self.assertContains(response, "Untertyp:")
+        self.assertContains(response, "Zener")

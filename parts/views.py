@@ -146,6 +146,7 @@ def _compare_part_sort_values(left, right, *, direction="asc"):
 def _part_secondary_sort_tuple(part):
     return (
         _sort_text_key(part.part_type),
+        _sort_text_key(part.part_subtype),
         _sort_text_key(part.value),
         _sort_text_key(part.packaging),
         part.pk,
@@ -581,6 +582,7 @@ class PartListView(ListView):
         queryset = super().get_queryset()
         query = self.request.GET.get("q", "").strip()
         part_type = self.request.GET.get("part_type", "").strip()
+        part_subtype = self.request.GET.get("part_subtype", "").strip()
         packaging = self.request.GET.get("packaging", "").strip()
 
         if query:
@@ -590,6 +592,7 @@ class PartListView(ListView):
                 haystack = " ".join(
                     (
                         part.part_type or "",
+                        part.part_subtype or "",
                         part.value or "",
                         part.packaging or "",
                         part.description or "",
@@ -604,6 +607,8 @@ class PartListView(ListView):
             queryset = queryset.filter(pk__in=filtered)
         if part_type:
             queryset = queryset.filter(part_type__iexact=part_type)
+        if part_subtype:
+            queryset = queryset.filter(part_subtype__iexact=part_subtype)
         if packaging:
             queryset = queryset.filter(packaging__iexact=packaging)
 
@@ -625,9 +630,14 @@ class PartListView(ListView):
         context["current_q"] = self.request.GET.get("q", "").strip()
         context["current_part_type"] = self.request.GET.get("part_type", "").strip()
         context["current_packaging"] = self.request.GET.get("packaging", "").strip()
+        context["current_part_subtype"] = self.request.GET.get("part_subtype", "").strip()
         context["part_types"] = (
             Part.objects.exclude(part_type="").order_by("part_type").values_list("part_type", flat=True).distinct()
         )
+        subtype_qs = Part.objects.exclude(part_subtype="")
+        if context["current_part_type"]:
+            subtype_qs = subtype_qs.filter(part_type__iexact=context["current_part_type"])
+        context["part_subtypes"] = subtype_qs.order_by("part_subtype").values_list("part_subtype", flat=True).distinct()
         context["packaging_options"] = (
             Part.objects.exclude(packaging="").order_by("packaging").values_list("packaging", flat=True).distinct()
         )

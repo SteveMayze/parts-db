@@ -17,13 +17,21 @@
 
   <form method="get">
     <label for="q">Suche</label>
-    <input id="q" name="q" value="{{ current_q }}" placeholder="Typ, Wert, Verpackung, Beschreibung, Hersteller, Teilenummer">
+    <input id="q" name="q" value="{{ current_q }}" placeholder="Typ, Untertyp, Wert, Verpackung, Beschreibung, Hersteller, Teilenummer">
 
     <label for="part_type">Typ</label>
     <select id="part_type" name="part_type">
       <option value="">Alle</option>
       {% for item in part_types %}
         <option value="{{ item }}" {% if current_part_type == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="part_subtype">Untertyp</label>
+    <select id="part_subtype" name="part_subtype">
+      <option value="">Alle</option>
+      {% for item in part_subtypes %}
+        <option value="{{ item }}" {% if current_part_subtype|lower == item|lower %}selected{% endif %}>{{ item }}</option>
       {% endfor %}
     </select>
 
@@ -47,6 +55,7 @@
             Typ{% if sort_headers.type.active %}<span aria-hidden="true"> {{ sort_headers.type.arrow }}</span>{% endif %}
           </a>
         </th>
+        <th>Untertyp</th>
         <th scope="col" {% if sort_headers.value.active %}aria-sort="{{ sort_headers.value.aria_sort }}"{% endif %}>
           <a href="{{ sort_headers.value.url }}" title="{{ sort_headers.value.sort_title }}" aria-label="{{ sort_headers.value.sort_title }}">
             Wert{% if sort_headers.value.active %}<span aria-hidden="true"> {{ sort_headers.value.arrow }}</span>{% endif %}
@@ -77,6 +86,7 @@
       {% for part in parts %}
         <tr>
           <td>{{ part.part_type }}</td>
+          <td>{{ part.part_subtype }}</td>
           <td>{{ part.value }}</td>
           <td>{{ part.packaging }}</td>
           <td>{{ part.description }}</td>
@@ -92,7 +102,7 @@
         </tr>
       {% empty %}
         <tr>
-          <td colspan="9">Keine Bauteile gefunden.</td>
+          <td colspan="10">Keine Bauteile gefunden.</td>
         </tr>
       {% endfor %}
     </tbody>
