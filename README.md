@@ -231,24 +231,6 @@ What it does:
 - starts/restarts the app container
 - smoke-checks `http://<your-host>:<app_port>/parts/`
 
-### APT issue: stale Caddy Cloudsmith repo
-
-Some hosts still carry a broken Caddy APT source from `dl.cloudsmith.io`. It can return `402 Payment Required` and abort `apt update` before any required package install succeeds.
-
-If you see errors like `Failed to fetch ... dl.cloudsmith.io ... 402` or `repository ... InRelease is no longer signed`, remove the stale repo first:
-
-```bash
-make caddy-cleanup
-```
-
-or directly:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/cleanup-caddy-apt-sources.yaml -K -vv
-```
-
-The cleanup removes stale Caddy source files from `/etc/apt/sources.list.d/` and refreshes the apt cache before the main deployment continues.
-
 ### Secrets and safety
 
 - `infra/group_vars/all.yml` is ignored by git and must stay local.
@@ -296,33 +278,6 @@ What it does:
 - writes a Quadlet file at `/etc/containers/systemd/parts-db.container`
 - enables/restarts `parts-db.service`
 - smoke-checks `http://<your-host>:<app_port>/parts/`
-
-## Caddy options (proxy or disable)
-
-If Caddy is already running and owning your host on port 80, you have two choices:
-
-### Option A: Reconfigure Caddy to proxy this app (recommended)
-
-```bash
-make caddy-proxy
-```
-
-This writes `/etc/caddy/Caddyfile` to proxy:
-- `/parts*` -> `127.0.0.1:8888`
-- `/admin*` -> `127.0.0.1:8888`
-- `/static*` -> `127.0.0.1:8888`
-
-Then you can use:
-- `http://<your-host>/parts/`
-
-### Option B: Disable Caddy entirely
-
-```bash
-make caddy-disable
-```
-
-Then access directly via app port:
-- `http://<your-host>:<app_port>/parts/`
 
 ## Why "server not found" can happen
 

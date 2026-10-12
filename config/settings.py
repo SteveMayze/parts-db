@@ -34,6 +34,18 @@ else:
     DEBUG = True
     ALLOWED_HOSTS = []
 
+# Send application errors (tracebacks) to the console so they reach the
+# container log (podman logs / journalctl), even when DEBUG is off.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+    },
+}
+
 LANGUAGE_CODE = "de"
 TIME_ZONE = "Europe/Berlin"
 USE_I18N = True
