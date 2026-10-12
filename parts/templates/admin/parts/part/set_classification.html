@@ -1,0 +1,15 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+  <p>{{ queryset.count }} Bauteil(e) ausgewählt. Nur ausgefüllte Felder werden geändert; Groß-/Kleinschreibung bleibt erhalten.</p>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    {% for part in queryset %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ part.pk }}">
+    {% endfor %}
+    <input type="hidden" name="action" value="{{ action_name }}">
+    <input type="hidden" name="apply" value="1">
+    <input type="submit" value="Übernehmen">
+    <a href="{% url 'admin:parts_part_changelist' %}">Abbrechen</a>
+  </form>
+{% endblock %}

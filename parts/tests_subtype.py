@@ -156,3 +156,44 @@ class PartSubtypeListTests(TestCase):
         response = self.client.get(reverse("parts:detail", args=[self.zener.pk]))
         self.assertContains(response, "Untertyp:")
         self.assertContains(response, "Zener")
+
+
+class PartAdminActionTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.create_superuser("admin", "a@example.com", "pw")
+        self.client.force_login(user)
+        self.zener = Part.objects.create(part_type="Zener", value="5V1")
+        self.tvs = Part.objects.create(part_type="TVS", part_subtype="alt", value="SMBJ")
+        self.url = reverse("admin:parts_part_changelist")
+
+    def _post(self, parts, **fields):
+        data = {"action": "set_classification", "_selected_action": [p.pk for p in parts], "apply": "1"}
+        data.update(fields)
+        return self.client.post(self.url, data)
+
+    def test_action_shows_confirmation_form_first(self):
+        response = self.client.post(self.url, {"action": "set_classification", "_selected_action": [self.zener.pk]})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Untertyp")
+        self.zener.refresh_from_db()
+        self.assertEqual(self.zener.part_type, "Zener")
+
+    def test_action_sets_type_and_subtype_keeping_case_and_stripping(self):
+        response = self._post([self.zener], part_type=" Diode ", part_subtype=" Zener ")
+        self.assertEqual(response.status_code, 302)
+        self.zener.refresh_from_db()
+        self.assertEqual((self.zener.part_type, self.zener.part_subtype), ("Diode", "Zener"))
+
+    def test_blank_fields_leave_values_unchanged_and_clear_option_clears(self):
+        self._post([self.tvs], part_type="Diode", part_subtype="")
+        self.tvs.refresh_from_db()
+        self.assertEqual((self.tvs.part_type, self.tvs.part_subtype), ("Diode", "alt"))
+        self._post([self.tvs], clear_subtype="on")
+        self.tvs.refresh_from_db()
+        self.assertEqual((self.tvs.part_type, self.tvs.part_subtype), ("Diode", ""))
+
+    def test_admin_changelist_and_filter_load(self):
+        response = self.client.get(self.url, {"part_subtype": "alt", "q": "tvs"})
+        self.assertEqual(response.status_code, 200)
