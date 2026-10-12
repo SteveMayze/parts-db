@@ -82,6 +82,15 @@ UI entry points:
 
 For production backups, back up the SQLite file (or database host) and the `media/` folder together so the PDF originals and the database remain in sync. In the Docker/Ansible deployment this folder should live on the same persistent volume as the app data.
 
+## Type and subtype (Typ / Untertyp)
+
+Each part has a free-text **Typ** (broad category, e.g. `Diode`, `LED`) and an optional free-text **Untertyp** (e.g. `Zener`, `TVS`, `Photodiode`).
+
+- Both fields autocomplete from values already in the database (the Untertyp suggestions narrow to the chosen Typ), but any text is accepted.
+- Whitespace is trimmed on save; capitalisation is kept as entered. Filtering and search ignore case.
+- The parts list can be filtered by Typ and then by Untertyp, and search also matches the Untertyp.
+- To re-classify existing parts in bulk: open **Verwaltung → Bauteile**, tick the parts, choose the action **Typ/Untertyp der ausgewählten Bauteile setzen**, fill in only the fields you want to change.
+
 ## Loading stock from CSV (parts already on hand)
 
 Use this when you have inventory without invoices/documents.
