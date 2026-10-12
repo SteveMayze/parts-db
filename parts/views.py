@@ -14,7 +14,8 @@ from functools import cmp_to_key
 from django.contrib import messages
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
+from django.db.models.functions import Length
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
@@ -566,6 +567,37 @@ def _get_valid_stock_preview(request):
     return payload
 
 
+def _parse_sort_params(request, allowed):
+    sort_key = request.GET.get("sort", "").strip()
+    direction = request.GET.get("dir", "asc").strip().lower()
+    if sort_key not in allowed or direction not in {"asc", "desc"}:
+        return "", "asc"
+    return sort_key, direction
+
+
+def _build_sort_headers(request, allowed, current_sort, current_dir):
+    columns = []
+    for key, label in allowed.items():
+        is_active = current_sort == key
+        direction = "desc" if is_active and current_dir == "asc" else "asc"
+        params = request.GET.copy()
+        params["sort"] = key
+        params["dir"] = direction
+        params["page"] = "1"
+        columns.append(
+            {
+                "key": key,
+                "label": label,
+                "url": "?{}".format(params.urlencode()),
+                "active": is_active,
+                "aria_sort": ("ascending" if current_dir == "asc" else "descending") if is_active else None,
+                "arrow": ("▲" if current_dir == "asc" else "▼") if is_active else "",
+                "sort_title": f"Nach {label} sortieren",
+            }
+        )
+    return columns
+
+
 class PartListView(ListView):
     model = Part
     template_name = "parts/part_list.html"
@@ -612,18 +644,10 @@ class PartListView(ListView):
         if packaging:
             queryset = queryset.filter(packaging__iexact=packaging)
 
-        sort_key = self.request.GET.get("sort", "").strip()
-        direction = self.request.GET.get("dir", "asc").strip().lower()
-        if sort_key in self.allowed_sort_keys and direction in {"asc", "desc"}:
+        sort_key, direction = _parse_sort_params(self.request, self.allowed_sort_keys)
+        if sort_key:
             queryset = sorted(queryset, key=cmp_to_key(lambda left, right: _compare_parts(left, right, sort_key=sort_key, direction=direction)))
         return queryset
-
-    def _header_url(self, sort_key, direction):
-        params = self.request.GET.copy()
-        params["sort"] = sort_key
-        params["dir"] = direction
-        params["page"] = "1"
-        return "?{}".format(params.urlencode())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -642,32 +666,8 @@ class PartListView(ListView):
             Part.objects.exclude(packaging="").order_by("packaging").values_list("packaging", flat=True).distinct()
         )
 
-        current_sort = self.request.GET.get("sort", "").strip()
-        current_dir = self.request.GET.get("dir", "asc").strip().lower()
-        if current_sort not in self.allowed_sort_keys or current_dir not in {"asc", "desc"}:
-            current_sort = ""
-            current_dir = "asc"
-
-        columns = []
-        for key, label in self.allowed_sort_keys.items():
-            is_active = current_sort == key
-            direction = "asc"
-            if is_active and current_dir == "asc":
-                direction = "desc"
-            elif is_active:
-                direction = "asc"
-            arrow = "▲" if is_active and current_dir == "asc" else "▼" if is_active else ""
-            columns.append(
-                {
-                    "key": key,
-                    "label": label,
-                    "url": self._header_url(key, direction if is_active else "asc"),
-                    "active": is_active,
-                    "aria_sort": "ascending" if is_active and current_dir == "asc" else "descending" if is_active else None,
-                    "arrow": arrow,
-                    "sort_title": f"Nach {label} sortieren",
-                }
-            )
+        current_sort, current_dir = _parse_sort_params(self.request, self.allowed_sort_keys)
+        columns = _build_sort_headers(self.request, self.allowed_sort_keys, current_sort, current_dir)
         context["sortable_columns"] = columns
         context["sort_headers"] = {column["key"]: column for column in columns}
         context["current_sort"] = current_sort
@@ -939,6 +939,10 @@ class PurchaseDocumentListView(ListView):
     model = PurchaseDocument
     template_name = "parts/purchase_document_list.html"
     context_object_name = "documents"
+    allowed_sort_keys = {
+        "date": "Datum",
+        "number": "Belegnummer",
+    }
 
     def get_queryset(self):
         queryset = PurchaseDocument.objects.select_related("supplier").prefetch_related("lines", "lines__project")
@@ -974,7 +978,20 @@ class PurchaseDocumentListView(ListView):
             queryset = queryset.filter(paper_filed=(paper_filed == "yes"))
         if has_pdf in {"yes", "no"}:
             queryset = queryset.filter(pdf_file__isnull=(has_pdf == "no"))
-        return queryset.distinct().order_by("-document_date", "-created_at")
+        sort_key, direction = _parse_sort_params(self.request, self.allowed_sort_keys)
+        if sort_key == "date":
+            field = F("document_date")
+            order = [field.asc(nulls_last=True) if direction == "asc" else field.desc(nulls_last=True)]
+        elif sort_key == "number":
+            # Belegnummer is free text: order by length first so "9" sorts before "10".
+            queryset = queryset.annotate(document_number_len=Length("document_number"))
+            order = [
+                getattr(F("document_number_len"), direction)(),
+                getattr(F("document_number"), direction)(),
+            ]
+        else:
+            return queryset.distinct().order_by("-document_date", "-created_at")
+        return queryset.distinct().order_by(*order, getattr(F("pk"), direction)())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -985,6 +1002,11 @@ class PurchaseDocumentListView(ListView):
         context["current_project"] = self.request.GET.get("project", "").strip()
         context["current_paper_filed"] = self.request.GET.get("paper_filed", "").strip()
         context["current_has_pdf"] = self.request.GET.get("has_pdf", "").strip()
+        current_sort, current_dir = _parse_sort_params(self.request, self.allowed_sort_keys)
+        columns = _build_sort_headers(self.request, self.allowed_sort_keys, current_sort, current_dir)
+        context["sort_headers"] = {column["key"]: column for column in columns}
+        context["current_sort"] = current_sort
+        context["current_dir"] = current_dir
         context["suppliers"] = Supplier.objects.order_by("name")
         context["projects"] = Project.objects.filter(active=True).order_by("name")
         context["document_types"] = PurchaseDocument.DocumentType.choices

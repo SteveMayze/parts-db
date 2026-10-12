@@ -62,6 +62,10 @@
       <option value="no" {% if current_has_pdf == "no" %}selected{% endif %}>Nein</option>
     </select>
 
+    {% if current_sort %}
+      <input type="hidden" name="sort" value="{{ current_sort }}">
+      <input type="hidden" name="dir" value="{{ current_dir }}">
+    {% endif %}
     <button type="submit">Filtern</button>
     <a href="{% url 'parts:documents' %}">Zurücksetzen</a>
   </form>
@@ -69,10 +73,18 @@
   <table>
     <thead>
       <tr>
-        <th>Datum</th>
+        <th scope="col" {% if sort_headers.date.active %}aria-sort="{{ sort_headers.date.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.date.url }}" title="{{ sort_headers.date.sort_title }}" aria-label="{{ sort_headers.date.sort_title }}">
+            Datum{% if sort_headers.date.active %}<span aria-hidden="true"> {{ sort_headers.date.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Lieferant</th>
         <th>Typ</th>
-        <th>Belegnummer</th>
+        <th scope="col" {% if sort_headers.number.active %}aria-sort="{{ sort_headers.number.aria_sort }}"{% endif %}>
+          <a href="{{ sort_headers.number.url }}" title="{{ sort_headers.number.sort_title }}" aria-label="{{ sort_headers.number.sort_title }}">
+            Belegnummer{% if sort_headers.number.active %}<span aria-hidden="true"> {{ sort_headers.number.arrow }}</span>{% endif %}
+          </a>
+        </th>
         <th>Papierbeleg-Nr.</th>
         <th>Ablageort</th>
         <th>PDF</th>
