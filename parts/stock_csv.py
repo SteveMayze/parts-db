@@ -23,6 +23,7 @@ STATUS_LABELS = {
 CSV_FIELDS = [
     "id",
     "part_type",
+    "part_subtype",
     "value",
     "packaging",
     "description",
@@ -38,6 +39,7 @@ CSV_FIELDS = [
 HEADER_ALIASES = {
     "id": {"id"},
     "part_type": {"part_type", "typ"},
+    "part_subtype": {"part_subtype", "subtype", "untertyp"},
     "value": {"value", "wert"},
     "packaging": {"packaging", "verpackung"},
     "description": {"description", "beschreibung"},
@@ -256,6 +258,7 @@ def _part_updates_for_row(part, data):
 
     for field in [
         "part_type",
+        "part_subtype",
         "value",
         "packaging",
         "description",
@@ -410,6 +413,7 @@ def apply_stock_preview(preview):
         if part is None:
             Part.objects.create(
                 part_type=data["part_type"],
+                part_subtype=data["part_subtype"],
                 value=data["value"],
                 packaging=data["packaging"],
                 description=data["description"],
@@ -436,6 +440,7 @@ def apply_stock_preview(preview):
                 changed = True
             for field in [
                 "part_type",
+                "part_subtype",
                 "value",
                 "packaging",
                 "description",

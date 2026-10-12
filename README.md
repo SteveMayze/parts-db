@@ -89,8 +89,8 @@ Use this when you have inventory without invoices/documents.
 - Open **Bestand aus CSV laden** from the parts list.
 - Download **Vorlage herunterladen** for the exact import format.
 - Supported headers (case-insensitive, any order):  
-  `id, part_type, value, packaging, description, quantity, location_type, location_name, position, manufacturer, mf_part_no, comment`  
-  German aliases from the UI are also accepted (for example `Typ`, `Wert`, `Verpackung`, `Menge`, `Lagerort`, `Herstellerteilnummer`, `Kommentar`).
+  `id, part_type, part_subtype (optional), value, packaging, description, quantity, location_type, location_name, position, manufacturer, mf_part_no, comment`  
+  German aliases from the UI are also accepted (for example `Typ`, `Untertyp`, `Wert`, `Verpackung`, `Menge`, `Lagerort`, `Herstellerteilnummer`, `Kommentar`).
 - Save CSV as **CSV UTF-8** (or CP1252 is accepted), delimiter `;`, `,` or tab.
 - Keep `quantity` as a whole number (`>= 0`).
 - For spreadsheet safety, format the **packaging** column as text before entering values like `0805`.

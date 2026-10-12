@@ -771,6 +771,7 @@ def stock_csv_template(request):
     writer.writerow([
         "id",
         "part_type",
+        "part_subtype",
         "value",
         "packaging",
         "description",
@@ -782,9 +783,9 @@ def stock_csv_template(request):
         "mf_part_no",
         "comment",
     ])
-    writer.writerow(["", "Widerstand", "4,7k", "0805", "SMD Widerstand 1%", "200", "drawer", "Schubladenblock A", "Fach 3", "Yageo", "RC0805", "Bestand Alt"])
-    writer.writerow(["", "Kondensator", "100nF", "0603", "Kerko X7R", "350", "folder", "Mappe 2", "Seite 4", "Murata", "GRM188", ""])
-    writer.writerow(["", "Transistor", "", "TO-92", "BC547B NPN", "50", "", "Sortierbox 1", "Reihe C", "onsemi", "BC547B", "ohne exakten Wert"])
+    writer.writerow(["", "Widerstand", "", "4,7k", "0805", "SMD Widerstand 1%", "200", "drawer", "Schubladenblock A", "Fach 3", "Yageo", "RC0805", "Bestand Alt"])
+    writer.writerow(["", "Kondensator", "Keramik", "100nF", "0603", "Kerko X7R", "350", "folder", "Mappe 2", "Seite 4", "Murata", "GRM188", ""])
+    writer.writerow(["", "Transistor", "", "", "TO-92", "BC547B NPN", "50", "", "Sortierbox 1", "Reihe C", "onsemi", "BC547B", "ohne exakten Wert"])
     return response
 
 
@@ -796,6 +797,7 @@ def stock_csv_export(request):
     writer.writerow([
         "id",
         "part_type",
+        "part_subtype",
         "value",
         "packaging",
         "description",
@@ -812,6 +814,7 @@ def stock_csv_export(request):
             [
                 part.id,
                 part.part_type,
+                part.part_subtype,
                 part.value,
                 part.packaging,
                 part.description,

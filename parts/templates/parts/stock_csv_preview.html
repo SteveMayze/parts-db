@@ -72,6 +72,7 @@
         <th>Zeile</th>
         <th>Status</th>
         <th>Typ</th>
+        <th>Untertyp</th>
         <th>Wert</th>
         <th>Verpackung</th>
         <th>Menge</th>
@@ -86,6 +87,7 @@
           <td>{{ row.line_no }}</td>
           <td>{{ row.status_label }}</td>
           <td>{{ row.data.part_type }}</td>
+          <td>{{ row.data.part_subtype }}</td>
           <td>{{ row.data.value }}</td>
           <td>{{ row.data.packaging }}</td>
           <td>{{ row.data.quantity }}</td>
