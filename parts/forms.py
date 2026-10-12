@@ -50,7 +50,7 @@ class PartForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["last_purchased"].input_formats = ["%d.%m.%Y", "%Y-%m-%d"]
+        self.fields["last_purchased"].input_formats = ["%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"]
 
 
 class InvoiceUploadForm(forms.Form):
