@@ -20,6 +20,17 @@ This file tracks small, test-first increments inspired by *Obey the Testing Goat
 - [x] Kept search text, filters and pagination state while changing sort direction or column
 - [x] Added regression tests for umlauts, natural numbers, empty values, invalid sort inputs, and active-header behavior
 
+## Gateway prefix phase (completed 2026-10-19)
+
+- [x] Proxy moved to the separate `cornil-gateway` repo; all Caddy code removed from this repo (see `docs/adr/0001-run-behind-gateway-under-url-prefix.md`)
+- [x] App runs under a URL prefix (`DJANGO_URL_PREFIX`), with TLS-proxy header, configurable hosts and CSRF origins, own cookie names scoped to the prefix, prefix-aware static URL
+- [x] Prefix tests (real test client) added; all tests pass with the prefix empty and set
+- [x] Quadlet deploy: `listen_address` variable (default all interfaces), secret key moved to a root-only environment file
+- [x] Container error logging; `feature/part-subtype` (Untertyp) merged into `main`
+- [x] Verified through the gateway and on the direct port; gateway `make smoke` passes
+- [ ] Not done: rotate the secret key (owner decision, deferred)
+- [ ] Later, separate phase: move to rootless Podman, join the gateway network, then close the published port to loopback
+
 ## Next increments
 
 ### Phase 1 — Core user behavior (now)
