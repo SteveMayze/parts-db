@@ -370,6 +370,7 @@ def build_invoice_preview(invoice_data):
         editable_type = (part.part_type if part else "") or str(suggestions["part_type"] or "")
         editable_value = (part.value if part else "") or str(suggestions["value"] or "")
         editable_packaging = (part.packaging if part else "") or str(suggestions["packaging"] or "")
+        editable_subtype = part.part_subtype if part else ""
         lines.append(
             {
                 "index": index,
@@ -386,10 +387,24 @@ def build_invoice_preview(invoice_data):
                 "status": status,
                 "status_label": status_label,
                 "match_type": match_type,
-                "part": {"pk": part.pk, "label": str(part)} if part else None,
+                "part": (
+                    {
+                        "pk": part.pk,
+                        "label": str(part),
+                        "part_type": part.part_type,
+                        "part_subtype": part.part_subtype,
+                        "manufacturer": part.manufacturer,
+                        "mf_part_no": part.mf_part_no,
+                    }
+                    if part
+                    else None
+                ),
                 "candidates": candidates,
                 "whg": line_data.get("whg", ""),
                 "part_type": editable_type,
+                "part_subtype": editable_subtype,
+                "manufacturer": "",
+                "edit_mf_part_no": line_data.get("mf_part_no", ""),
                 "value": editable_value,
                 "packaging": editable_packaging,
                 "part_type_suggested": str(suggestions["part_type"] or ""),
@@ -1248,6 +1263,7 @@ def invoice_upload(request):
 def _existing_classification_values() -> dict[str, list[str]]:
     return {
         "part_type": list(Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct()),
+        "part_subtype": list(Part.objects.exclude(part_subtype="").values_list("part_subtype", flat=True).distinct()),
         "packaging": list(Part.objects.exclude(packaging="").values_list("packaging", flat=True).distinct()),
     }
 
@@ -1312,6 +1328,8 @@ def _create_new_part(
     part_type,
     value,
     packaging,
+    part_subtype="",
+    manufacturer="",
     location_type="",
     location_name="",
     location_position="",
@@ -1319,10 +1337,11 @@ def _create_new_part(
     initial_quantity = quantity if quantity_mode == QUANTITY_MODE_ADD else 0
     return Part.objects.create(
         part_type=part_type,
+        part_subtype=part_subtype,
         value=value,
         packaging=packaging,
         description=description,
-        manufacturer="",
+        manufacturer=manufacturer,
         mf_part_no=mf_part_no,
         supplier=supplier,
         supplier_part_no=supplier_part_no,
@@ -1466,8 +1485,9 @@ def _overlay_post(payload, post):
             prefix = f"{doc_id}::{line['index']}"
             line["edit_quantity"] = post.get(f"quantity::{prefix}", str(line["quantity"]))
             line["edit_description"] = post.get(f"description::{prefix}", line.get("edit_description", line["description"]))
-            for field in ("part_type", "value", "packaging"):
+            for field in ("part_type", "part_subtype", "value", "packaging", "manufacturer"):
                 line[field] = post.get(f"{field}::{prefix}", line.get(field, ""))
+            line["edit_mf_part_no"] = post.get(f"mf_part_no::{prefix}", line.get("edit_mf_part_no", ""))
             line["project_id"] = post.get(f"project::{prefix}", "")
             line["location_type"] = post.get(f"location_type::{prefix}", "")
             line["location_name"] = post.get(f"location_name::{prefix}", "")
@@ -1494,6 +1514,7 @@ def _preview_context(payload):
         "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
         "known_part_types": sorted(existing["part_type"], key=str.casefold),
         "known_packagings": sorted(existing["packaging"], key=str.casefold),
+        "known_part_subtypes": sorted(existing["part_subtype"], key=str.casefold),
     }
 
 
@@ -1647,6 +1668,10 @@ def _confirm_documents(
             part_type = request.POST.get(f"part_type::{field_prefix}", line.get("part_type", "")).strip()
             value = request.POST.get(f"value::{field_prefix}", line.get("value", "")).strip()
             packaging = request.POST.get(f"packaging::{field_prefix}", line.get("packaging", "")).strip()
+            # Untertyp, Hersteller and Hersteller-Nr. only apply to newly created parts.
+            part_subtype = request.POST.get(f"part_subtype::{field_prefix}", line.get("part_subtype", ""))
+            manufacturer = request.POST.get(f"manufacturer::{field_prefix}", line.get("manufacturer", ""))
+            edited_mf_part_no = request.POST.get(f"mf_part_no::{field_prefix}", line.get("edit_mf_part_no", mf_part_no))
             line_project = _resolve_project_selection(
                 request.POST.get(f"project::{field_prefix}", ""),
                 fallback=_resolve_project_selection(batch_project_id, fallback=None),
@@ -1703,6 +1728,7 @@ def _confirm_documents(
                             "Zum Ändern bitte 'Lagerort ändern' ankreuzen oder den Lagerort leeren."
                         )
             else:
+                mf_part_no = " ".join(normalise_unicode_text(edited_mf_part_no).split())
                 part = _create_new_part(
                     quantity=quantity,
                     unit_price=unit_price,
@@ -1717,6 +1743,8 @@ def _confirm_documents(
                     part_type=_reuse_spelling(part_type, existing_types["part_type"]),
                     value=value,
                     packaging=_reuse_spelling(packaging, existing_types["packaging"]),
+                    part_subtype=_reuse_spelling(part_subtype, existing_types["part_subtype"]),
+                    manufacturer=" ".join(normalise_unicode_text(manufacturer).split()),
                     location_type=location.type,
                     location_name=location.name,
                     location_position=location.position,
