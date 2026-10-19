@@ -6,7 +6,7 @@ Wants=network-online.target
 [Container]
 Image={{ image_name }}
 ContainerName={{ app_name }}-web
-PublishPort={{ (listen_address ~ ':') if listen_address else '' }}{{ app_port | default(8888) }}:8000
+PublishPort={{ (listen_address ~ ':') if listen_address | default('') else '' }}{{ app_port | default(8888) }}:8000
 Volume={{ app_data_dir }}/db.sqlite3:/app/db.sqlite3:Z
 Volume={{ app_static_dir }}:/app/staticfiles:Z
 EnvironmentFile={{ env_file }}

@@ -11,12 +11,6 @@
     quadlet_file: "/etc/containers/systemd/{{ app_name }}.container"
     env_file_dir: "/etc/{{ app_name }}"
     env_file: "/etc/{{ app_name }}/{{ app_name }}.env"
-    # Published address of the app port; empty means all interfaces (today's behaviour).
-    listen_address: ""
-    # URL prefix the gateway serves the app under, for example "/parts-db"; empty means none.
-    url_prefix: ""
-    behind_tls_proxy: false
-    csrf_trusted_origins: []
 
   pre_tasks:
     - name: Ping target host
