@@ -9,19 +9,19 @@
     app_static_dir: "{{ app_root }}/staticfiles"
     image_name: "{{ app_name }}:latest"
     container_name: "{{ app_name }}-web"
+    listen_address: ""
+    url_prefix: ""
+    behind_tls_proxy: false
+    csrf_trusted_origins: []
+    django_env:
+      DJANGO_DEBUG_FALSE: "1"
+      DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+      DJANGO_ALLOWED_HOSTS: "{{ (django_allowed_hosts | default([django_allowed_host | default(inventory_hostname)])) | join(',') }}"
+      DJANGO_URL_PREFIX: "{{ url_prefix }}"
+      DJANGO_BEHIND_TLS_PROXY: "{{ '1' if behind_tls_proxy | bool else '' }}"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "{{ csrf_trusted_origins | join(',') }}"
 
   pre_tasks:
-    - name: Remove broken Caddy Cloudsmith apt sources before installing packages
-      become: true
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/apt/sources.list.d/caddy-stable.list
-        - /etc/apt/sources.list.d/caddy-stable.sources
-        - /etc/apt/sources.list.d/caddy.list
-        - /etc/apt/sources.list.d/caddy.sources
-
     - name: Ping target host
       ansible.builtin.ping:
 
@@ -96,10 +96,7 @@
         command: python manage.py migrate --noinput
         detach: false
         auto_remove: true
-        env:
-          DJANGO_DEBUG_FALSE: "1"
-          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
-          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+        env: "{{ django_env }}"
         volumes:
           - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
           - "{{ app_static_dir }}:/app/staticfiles"
@@ -111,10 +108,7 @@
         command: python manage.py collectstatic --noinput
         detach: false
         auto_remove: true
-        env:
-          DJANGO_DEBUG_FALSE: "1"
-          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
-          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+        env: "{{ django_env }}"
         volumes:
           - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
           - "{{ app_static_dir }}:/app/staticfiles"
@@ -127,11 +121,8 @@
         recreate: true
         restart_policy: unless-stopped
         published_ports:
-          - "{{ app_port | default(8888) }}:8000"
-        env:
-          DJANGO_DEBUG_FALSE: "1"
-          DJANGO_SECRET_KEY: "{{ django_secret_key }}"
-          DJANGO_ALLOWED_HOST: "{{ django_allowed_host | default(inventory_hostname) }}"
+          - "{{ (listen_address ~ ':') if listen_address else '' }}{{ app_port | default(8888) }}:8000"
+        env: "{{ django_env }}"
         volumes:
           - "{{ app_data_dir }}/db.sqlite3:/app/db.sqlite3"
           - "{{ app_static_dir }}:/app/staticfiles"

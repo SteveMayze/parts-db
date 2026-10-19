@@ -17,15 +17,19 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _env_list(name):
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 if "DJANGO_DEBUG_FALSE" in os.environ:
     DEBUG = False
     SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
-    allowed_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS", "").strip()
+    allowed_hosts = _env_list("DJANGO_ALLOWED_HOSTS")
     if allowed_hosts:
-        ALLOWED_HOSTS = [host.strip() for host in allowed_hosts.split(",") if host.strip()]
+        ALLOWED_HOSTS = allowed_hosts
     else:
         ALLOWED_HOSTS = [os.environ["DJANGO_ALLOWED_HOST"]]
 else:
@@ -33,6 +37,31 @@ else:
     SECRET_KEY = "insecure-key-for-dev"
     DEBUG = True
     ALLOWED_HOSTS = []
+
+# URL prefix when the app is served below a path by a reverse proxy that strips
+# it (for example "/parts-db"). Empty means the app lives at the site root.
+URL_PREFIX = os.environ.get("DJANGO_URL_PREFIX", "").strip().strip("/")
+URL_PREFIX = f"/{URL_PREFIX}" if URL_PREFIX else ""
+if URL_PREFIX:
+    FORCE_SCRIPT_NAME = URL_PREFIX
+
+# Behind a TLS-terminating proxy that sends X-Forwarded-Proto.
+if os.environ.get("DJANGO_BEHIND_TLS_PROXY"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+
+# Own cookie names and path so other apps on the same host name do not
+# overwrite or log out this one.
+SESSION_COOKIE_NAME = "partsdb_sessionid"
+CSRF_COOKIE_NAME = "partsdb_csrftoken"
+SESSION_COOKIE_PATH = URL_PREFIX or "/"
+CSRF_COOKIE_PATH = URL_PREFIX or "/"
+
+# Named URLs are resolved with the prefix; the app only has the admin login.
+LOGIN_URL = "admin:login"
+LOGIN_REDIRECT_URL = "parts:list"
+LOGOUT_REDIRECT_URL = "admin:login"
 
 LANGUAGE_CODE = "de"
 TIME_ZONE = "Europe/Berlin"
@@ -53,6 +82,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'config.middleware.StripUrlPrefixMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

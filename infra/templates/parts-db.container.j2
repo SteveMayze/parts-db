@@ -6,12 +6,10 @@ Wants=network-online.target
 [Container]
 Image={{ image_name }}
 ContainerName={{ app_name }}-web
-PublishPort={{ app_port | default(8888) }}:8000
+PublishPort={{ (listen_address ~ ':') if listen_address else '' }}{{ app_port | default(8888) }}:8000
 Volume={{ app_data_dir }}/db.sqlite3:/app/db.sqlite3:Z
 Volume={{ app_static_dir }}:/app/staticfiles:Z
-Environment=DJANGO_DEBUG_FALSE=1
-Environment=DJANGO_SECRET_KEY={{ django_secret_key }}
-Environment=DJANGO_ALLOWED_HOST={{ django_allowed_host | default(inventory_hostname) }}
+EnvironmentFile={{ env_file }}
 AutoUpdate=registry
 
 [Service]

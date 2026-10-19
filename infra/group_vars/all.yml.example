@@ -6,3 +6,18 @@ django_allowed_host: "your-host.example.com"
 
 # Host port to expose the app on.
 app_port: 8888
+
+# Address the app port is published on. Empty = all interfaces (needed while the
+# gateway reaches the app through the host; do not set 127.0.0.1 yet).
+listen_address: ""
+
+# Served below this path by the gateway (it strips the prefix). Empty = site root.
+url_prefix: "/parts-db"
+behind_tls_proxy: true
+
+# Hosts and origins Django accepts (the plain-HTTP origin is the direct app port).
+django_allowed_hosts:
+  - "your-host.example.com"
+csrf_trusted_origins:
+  - "https://your-host.example.com"
+  - "http://your-host.example.com:8888"

@@ -9,19 +9,16 @@
     app_static_dir: "{{ app_root }}/staticfiles"
     image_name: "localhost/{{ app_name }}:latest"
     quadlet_file: "/etc/containers/systemd/{{ app_name }}.container"
+    env_file_dir: "/etc/{{ app_name }}"
+    env_file: "/etc/{{ app_name }}/{{ app_name }}.env"
+    # Published address of the app port; empty means all interfaces (today's behaviour).
+    listen_address: ""
+    # URL prefix the gateway serves the app under, for example "/parts-db"; empty means none.
+    url_prefix: ""
+    behind_tls_proxy: false
+    csrf_trusted_origins: []
 
   pre_tasks:
-    - name: Remove broken Caddy Cloudsmith apt sources before installing packages
-      become: true
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/apt/sources.list.d/caddy-stable.list
-        - /etc/apt/sources.list.d/caddy-stable.sources
-        - /etc/apt/sources.list.d/caddy.list
-        - /etc/apt/sources.list.d/caddy.sources
-
     - name: Ping target host
       ansible.builtin.ping:
 
@@ -73,6 +70,25 @@
           - "--exclude=db.sqlite3"
           - "--exclude=infra/group_vars/all.yml"
 
+    - name: Ensure root-only configuration directory exists
+      become: true
+      ansible.builtin.file:
+        path: "{{ env_file_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install root-only environment file (holds the secret key)
+      become: true
+      ansible.builtin.template:
+        src: templates/parts-db.env.j2
+        dest: "{{ env_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
     - name: Build application image with Podman
       become: true
       ansible.builtin.command:
@@ -83,9 +99,7 @@
       ansible.builtin.command:
         cmd: >
           podman run --rm
-          -e DJANGO_DEBUG_FALSE=1
-          -e DJANGO_SECRET_KEY={{ django_secret_key | quote }}
-          -e DJANGO_ALLOWED_HOST={{ (django_allowed_host | default(inventory_hostname)) | quote }}
+          --env-file {{ env_file }}
           -v {{ app_data_dir }}/db.sqlite3:/app/db.sqlite3
           -v {{ app_static_dir }}:/app/staticfiles
           {{ image_name }}
@@ -96,9 +110,7 @@
       ansible.builtin.command:
         cmd: >
           podman run --rm
-          -e DJANGO_DEBUG_FALSE=1
-          -e DJANGO_SECRET_KEY={{ django_secret_key | quote }}
-          -e DJANGO_ALLOWED_HOST={{ (django_allowed_host | default(inventory_hostname)) | quote }}
+          --env-file {{ env_file }}
           -v {{ app_data_dir }}/db.sqlite3:/app/db.sqlite3
           -v {{ app_static_dir }}:/app/staticfiles
           {{ image_name }}

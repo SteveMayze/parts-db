@@ -196,7 +196,7 @@ This follows the Testing Goat style from chapters 9–12: containerize, producti
    ```
 5. Edit `infra/group_vars/all.yml` and set real values for:
    - `django_secret_key`
-   - `django_allowed_host`
+   - `django_allowed_host` (or `django_allowed_hosts`, plus the proxy variables below)
    - `app_port` (optional)
 6. Edit `infra/inventory.local.ini` and set your deployment target host and user.
 
@@ -230,24 +230,6 @@ What it does:
 - runs migrations + `collectstatic`
 - starts/restarts the app container
 - smoke-checks `http://<your-host>:<app_port>/parts/`
-
-### APT issue: stale Caddy Cloudsmith repo
-
-Some hosts still carry a broken Caddy APT source from `dl.cloudsmith.io`. It can return `402 Payment Required` and abort `apt update` before any required package install succeeds.
-
-If you see errors like `Failed to fetch ... dl.cloudsmith.io ... 402` or `repository ... InRelease is no longer signed`, remove the stale repo first:
-
-```bash
-make caddy-cleanup
-```
-
-or directly:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/cleanup-caddy-apt-sources.yaml -K -vv
-```
-
-The cleanup removes stale Caddy source files from `/etc/apt/sources.list.d/` and refreshes the apt cache before the main deployment continues.
 
 ### Secrets and safety
 
@@ -297,32 +279,21 @@ What it does:
 - enables/restarts `parts-db.service`
 - smoke-checks `http://<your-host>:<app_port>/parts/`
 
-## Caddy options (proxy or disable)
+## Reverse proxy and URL prefix
 
-If Caddy is already running and owning your host on port 80, you have two choices:
+The reverse proxy (Caddy, TLS, routing) is **not** part of this repository. It is owned by the separate `cornil-gateway` repository, which serves several apps on one host. Older Caddy playbooks and Makefile targets from this repo are available in git history only.
 
-### Option A: Reconfigure Caddy to proxy this app (recommended)
+The gateway forwards `https://<host>/parts-db/...` to this app and strips the `/parts-db` prefix. Configure the app with these deployment variables (see `infra/group_vars/all.yml.example`), which the Quadlet playbook writes to a root-only environment file on the host:
 
-```bash
-make caddy-proxy
-```
+| Variable | Environment variable | Purpose |
+| --- | --- | --- |
+| `url_prefix` | `DJANGO_URL_PREFIX` | e.g. `/parts-db`; generates prefixed links, redirects, static URLs; empty = site root |
+| `behind_tls_proxy` | `DJANGO_BEHIND_TLS_PROXY` | trust `X-Forwarded-Proto` from the proxy |
+| `django_allowed_hosts` | `DJANGO_ALLOWED_HOSTS` | accepted host names |
+| `csrf_trusted_origins` | `DJANGO_CSRF_TRUSTED_ORIGINS` | accepted origins for form posts |
+| `listen_address` | (Quadlet `PublishPort`) | address of the published port; empty = all interfaces |
 
-This writes `/etc/caddy/Caddyfile` to proxy:
-- `/parts*` -> `127.0.0.1:8888`
-- `/admin*` -> `127.0.0.1:8888`
-- `/static*` -> `127.0.0.1:8888`
-
-Then you can use:
-- `http://<your-host>/parts/`
-
-### Option B: Disable Caddy entirely
-
-```bash
-make caddy-disable
-```
-
-Then access directly via app port:
-- `http://<your-host>:<app_port>/parts/`
+Session and CSRF cookies are named `partsdb_sessionid` / `partsdb_csrftoken` and limited to the prefix path, so other apps on the same host do not log this one out. The app also accepts the prefix on its own port, so `http://<host>:<app_port>/parts/` and `.../parts-db/parts/` both work.
 
 ## Why "server not found" can happen
 
