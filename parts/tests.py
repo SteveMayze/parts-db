@@ -1024,7 +1024,7 @@ class StockCsvImportFlowTests(TestCase):
     def test_template_and_export_roundtrip(self):
         template = self.client.get(reverse("parts:stock_csv_template"))
         self.assertEqual(template.status_code, 200)
-        self.assertIn("part_type;value;packaging", template.content.decode("utf-8-sig"))
+        self.assertIn("part_type;part_subtype;value;packaging", template.content.decode("utf-8-sig"))
 
         exported = self.client.get(reverse("parts:stock_csv_export"))
         self.assertEqual(exported.status_code, 200)
@@ -1073,7 +1073,7 @@ class StockCsvImportFlowTests(TestCase):
         lines = exported.splitlines()
         header = lines[0]
         row = lines[1].split(";")
-        row[7] = "Schublade Z"
+        row[8] = "Schublade Z"
         edited = "\n".join([header, ";".join(row)])
         self._upload(edited.encode("utf-8-sig"), IMPORT_MODE_UPDATE)
         self.client.post(reverse("parts:stock_csv_preview"), {"continue_without_errors": "yes"})

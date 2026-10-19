@@ -63,6 +63,18 @@ LOGIN_URL = "admin:login"
 LOGIN_REDIRECT_URL = "parts:list"
 LOGOUT_REDIRECT_URL = "admin:login"
 
+# Send application errors (tracebacks) to the console so they reach the
+# container log (podman logs / journalctl), even when DEBUG is off.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+    },
+}
+
 LANGUAGE_CODE = "de"
 TIME_ZONE = "Europe/Berlin"
 USE_I18N = True
@@ -161,12 +173,3 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
-# Write request errors (tracebacks of 500s) to the console, so they reach the
-# container log even with DEBUG off.
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
-    "loggers": {"django.request": {"handlers": ["console"], "level": "ERROR"}},
-}

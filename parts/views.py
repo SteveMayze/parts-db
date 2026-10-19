@@ -14,7 +14,8 @@ from functools import cmp_to_key
 from django.contrib import messages
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
+from django.db.models.functions import Length
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
@@ -146,6 +147,7 @@ def _compare_part_sort_values(left, right, *, direction="asc"):
 def _part_secondary_sort_tuple(part):
     return (
         _sort_text_key(part.part_type),
+        _sort_text_key(part.part_subtype),
         _sort_text_key(part.value),
         _sort_text_key(part.packaging),
         part.pk,
@@ -333,6 +335,29 @@ def _get_existing_part_types() -> list[str]:
     return list(Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct())
 
 
+def _classification_suggestions() -> dict:
+    """Distinct type/subtype values already in use, for <datalist> autocomplete.
+
+    ``subtypes_by_type`` maps the casefolded type to the subtypes used with it, so the
+    form can narrow the subtype suggestions once a type is entered.
+    """
+    pairs = Part.objects.values_list("part_type", "part_subtype").distinct()
+    types = set()
+    subtypes = set()
+    by_type: dict[str, set[str]] = {}
+    for part_type, part_subtype in pairs:
+        if part_type:
+            types.add(part_type)
+        if part_subtype:
+            subtypes.add(part_subtype)
+            by_type.setdefault(part_type.casefold(), set()).add(part_subtype)
+    return {
+        "known_part_types": sorted(types, key=str.casefold),
+        "known_part_subtypes": sorted(subtypes, key=str.casefold),
+        "subtypes_by_type": {key: sorted(values, key=str.casefold) for key, values in by_type.items()},
+    }
+
+
 def build_invoice_preview(invoice_data):
     existing_part_types = _get_existing_part_types()
     new_type_names: set[str] = set()
@@ -345,6 +370,7 @@ def build_invoice_preview(invoice_data):
         editable_type = (part.part_type if part else "") or str(suggestions["part_type"] or "")
         editable_value = (part.value if part else "") or str(suggestions["value"] or "")
         editable_packaging = (part.packaging if part else "") or str(suggestions["packaging"] or "")
+        editable_subtype = part.part_subtype if part else ""
         lines.append(
             {
                 "index": index,
@@ -361,10 +387,24 @@ def build_invoice_preview(invoice_data):
                 "status": status,
                 "status_label": status_label,
                 "match_type": match_type,
-                "part": {"pk": part.pk, "label": str(part)} if part else None,
+                "part": (
+                    {
+                        "pk": part.pk,
+                        "label": str(part),
+                        "part_type": part.part_type,
+                        "part_subtype": part.part_subtype,
+                        "manufacturer": part.manufacturer,
+                        "mf_part_no": part.mf_part_no,
+                    }
+                    if part
+                    else None
+                ),
                 "candidates": candidates,
                 "whg": line_data.get("whg", ""),
                 "part_type": editable_type,
+                "part_subtype": editable_subtype,
+                "manufacturer": "",
+                "edit_mf_part_no": line_data.get("mf_part_no", ""),
                 "value": editable_value,
                 "packaging": editable_packaging,
                 "part_type_suggested": str(suggestions["part_type"] or ""),
@@ -542,6 +582,37 @@ def _get_valid_stock_preview(request):
     return payload
 
 
+def _parse_sort_params(request, allowed):
+    sort_key = request.GET.get("sort", "").strip()
+    direction = request.GET.get("dir", "asc").strip().lower()
+    if sort_key not in allowed or direction not in {"asc", "desc"}:
+        return "", "asc"
+    return sort_key, direction
+
+
+def _build_sort_headers(request, allowed, current_sort, current_dir):
+    columns = []
+    for key, label in allowed.items():
+        is_active = current_sort == key
+        direction = "desc" if is_active and current_dir == "asc" else "asc"
+        params = request.GET.copy()
+        params["sort"] = key
+        params["dir"] = direction
+        params["page"] = "1"
+        columns.append(
+            {
+                "key": key,
+                "label": label,
+                "url": "?{}".format(params.urlencode()),
+                "active": is_active,
+                "aria_sort": ("ascending" if current_dir == "asc" else "descending") if is_active else None,
+                "arrow": ("▲" if current_dir == "asc" else "▼") if is_active else "",
+                "sort_title": f"Nach {label} sortieren",
+            }
+        )
+    return columns
+
+
 class PartListView(ListView):
     model = Part
     template_name = "parts/part_list.html"
@@ -558,6 +629,7 @@ class PartListView(ListView):
         queryset = super().get_queryset()
         query = self.request.GET.get("q", "").strip()
         part_type = self.request.GET.get("part_type", "").strip()
+        part_subtype = self.request.GET.get("part_subtype", "").strip()
         packaging = self.request.GET.get("packaging", "").strip()
 
         if query:
@@ -567,6 +639,7 @@ class PartListView(ListView):
                 haystack = " ".join(
                     (
                         part.part_type or "",
+                        part.part_subtype or "",
                         part.value or "",
                         part.packaging or "",
                         part.description or "",
@@ -581,60 +654,35 @@ class PartListView(ListView):
             queryset = queryset.filter(pk__in=filtered)
         if part_type:
             queryset = queryset.filter(part_type__iexact=part_type)
+        if part_subtype:
+            queryset = queryset.filter(part_subtype__iexact=part_subtype)
         if packaging:
             queryset = queryset.filter(packaging__iexact=packaging)
 
-        sort_key = self.request.GET.get("sort", "").strip()
-        direction = self.request.GET.get("dir", "asc").strip().lower()
-        if sort_key in self.allowed_sort_keys and direction in {"asc", "desc"}:
+        sort_key, direction = _parse_sort_params(self.request, self.allowed_sort_keys)
+        if sort_key:
             queryset = sorted(queryset, key=cmp_to_key(lambda left, right: _compare_parts(left, right, sort_key=sort_key, direction=direction)))
         return queryset
-
-    def _header_url(self, sort_key, direction):
-        params = self.request.GET.copy()
-        params["sort"] = sort_key
-        params["dir"] = direction
-        params["page"] = "1"
-        return "?{}".format(params.urlencode())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["current_q"] = self.request.GET.get("q", "").strip()
         context["current_part_type"] = self.request.GET.get("part_type", "").strip()
         context["current_packaging"] = self.request.GET.get("packaging", "").strip()
+        context["current_part_subtype"] = self.request.GET.get("part_subtype", "").strip()
         context["part_types"] = (
             Part.objects.exclude(part_type="").order_by("part_type").values_list("part_type", flat=True).distinct()
         )
+        subtype_qs = Part.objects.exclude(part_subtype="")
+        if context["current_part_type"]:
+            subtype_qs = subtype_qs.filter(part_type__iexact=context["current_part_type"])
+        context["part_subtypes"] = subtype_qs.order_by("part_subtype").values_list("part_subtype", flat=True).distinct()
         context["packaging_options"] = (
             Part.objects.exclude(packaging="").order_by("packaging").values_list("packaging", flat=True).distinct()
         )
 
-        current_sort = self.request.GET.get("sort", "").strip()
-        current_dir = self.request.GET.get("dir", "asc").strip().lower()
-        if current_sort not in self.allowed_sort_keys or current_dir not in {"asc", "desc"}:
-            current_sort = ""
-            current_dir = "asc"
-
-        columns = []
-        for key, label in self.allowed_sort_keys.items():
-            is_active = current_sort == key
-            direction = "asc"
-            if is_active and current_dir == "asc":
-                direction = "desc"
-            elif is_active:
-                direction = "asc"
-            arrow = "▲" if is_active and current_dir == "asc" else "▼" if is_active else ""
-            columns.append(
-                {
-                    "key": key,
-                    "label": label,
-                    "url": self._header_url(key, direction if is_active else "asc"),
-                    "active": is_active,
-                    "aria_sort": "ascending" if is_active and current_dir == "asc" else "descending" if is_active else None,
-                    "arrow": arrow,
-                    "sort_title": f"Nach {label} sortieren",
-                }
-            )
+        current_sort, current_dir = _parse_sort_params(self.request, self.allowed_sort_keys)
+        columns = _build_sort_headers(self.request, self.allowed_sort_keys, current_sort, current_dir)
         context["sortable_columns"] = columns
         context["sort_headers"] = {column["key"]: column for column in columns}
         context["current_sort"] = current_sort
@@ -642,14 +690,21 @@ class PartListView(ListView):
         return context
 
 
-class PartCreateView(CreateView):
+class PartFormContextMixin:
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(_classification_suggestions())
+        return context
+
+
+class PartCreateView(PartFormContextMixin, CreateView):
     model = Part
     form_class = PartForm
     template_name = "parts/part_form.html"
     success_url = reverse_lazy("parts:list")
 
 
-class PartUpdateView(UpdateView):
+class PartUpdateView(PartFormContextMixin, UpdateView):
     model = Part
     form_class = PartForm
     template_name = "parts/part_form.html"
@@ -731,6 +786,7 @@ def stock_csv_template(request):
     writer.writerow([
         "id",
         "part_type",
+        "part_subtype",
         "value",
         "packaging",
         "description",
@@ -742,9 +798,9 @@ def stock_csv_template(request):
         "mf_part_no",
         "comment",
     ])
-    writer.writerow(["", "Widerstand", "4,7k", "0805", "SMD Widerstand 1%", "200", "drawer", "Schubladenblock A", "Fach 3", "Yageo", "RC0805", "Bestand Alt"])
-    writer.writerow(["", "Kondensator", "100nF", "0603", "Kerko X7R", "350", "folder", "Mappe 2", "Seite 4", "Murata", "GRM188", ""])
-    writer.writerow(["", "Transistor", "", "TO-92", "BC547B NPN", "50", "", "Sortierbox 1", "Reihe C", "onsemi", "BC547B", "ohne exakten Wert"])
+    writer.writerow(["", "Widerstand", "", "4,7k", "0805", "SMD Widerstand 1%", "200", "drawer", "Schubladenblock A", "Fach 3", "Yageo", "RC0805", "Bestand Alt"])
+    writer.writerow(["", "Kondensator", "Keramik", "100nF", "0603", "Kerko X7R", "350", "folder", "Mappe 2", "Seite 4", "Murata", "GRM188", ""])
+    writer.writerow(["", "Transistor", "", "", "TO-92", "BC547B NPN", "50", "", "Sortierbox 1", "Reihe C", "onsemi", "BC547B", "ohne exakten Wert"])
     return response
 
 
@@ -756,6 +812,7 @@ def stock_csv_export(request):
     writer.writerow([
         "id",
         "part_type",
+        "part_subtype",
         "value",
         "packaging",
         "description",
@@ -772,6 +829,7 @@ def stock_csv_export(request):
             [
                 part.id,
                 part.part_type,
+                part.part_subtype,
                 part.value,
                 part.packaging,
                 part.description,
@@ -896,6 +954,10 @@ class PurchaseDocumentListView(ListView):
     model = PurchaseDocument
     template_name = "parts/purchase_document_list.html"
     context_object_name = "documents"
+    allowed_sort_keys = {
+        "date": "Datum",
+        "number": "Belegnummer",
+    }
 
     def get_queryset(self):
         queryset = PurchaseDocument.objects.select_related("supplier").prefetch_related("lines", "lines__project")
@@ -931,7 +993,20 @@ class PurchaseDocumentListView(ListView):
             queryset = queryset.filter(paper_filed=(paper_filed == "yes"))
         if has_pdf in {"yes", "no"}:
             queryset = queryset.filter(pdf_file__isnull=(has_pdf == "no"))
-        return queryset.distinct().order_by("-document_date", "-created_at")
+        sort_key, direction = _parse_sort_params(self.request, self.allowed_sort_keys)
+        if sort_key == "date":
+            field = F("document_date")
+            order = [field.asc(nulls_last=True) if direction == "asc" else field.desc(nulls_last=True)]
+        elif sort_key == "number":
+            # Belegnummer is free text: order by length first so "9" sorts before "10".
+            queryset = queryset.annotate(document_number_len=Length("document_number"))
+            order = [
+                getattr(F("document_number_len"), direction)(),
+                getattr(F("document_number"), direction)(),
+            ]
+        else:
+            return queryset.distinct().order_by("-document_date", "-created_at")
+        return queryset.distinct().order_by(*order, getattr(F("pk"), direction)())
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -942,6 +1017,11 @@ class PurchaseDocumentListView(ListView):
         context["current_project"] = self.request.GET.get("project", "").strip()
         context["current_paper_filed"] = self.request.GET.get("paper_filed", "").strip()
         context["current_has_pdf"] = self.request.GET.get("has_pdf", "").strip()
+        current_sort, current_dir = _parse_sort_params(self.request, self.allowed_sort_keys)
+        columns = _build_sort_headers(self.request, self.allowed_sort_keys, current_sort, current_dir)
+        context["sort_headers"] = {column["key"]: column for column in columns}
+        context["current_sort"] = current_sort
+        context["current_dir"] = current_dir
         context["suppliers"] = Supplier.objects.order_by("name")
         context["projects"] = Project.objects.filter(active=True).order_by("name")
         context["document_types"] = PurchaseDocument.DocumentType.choices
@@ -1183,6 +1263,7 @@ def invoice_upload(request):
 def _existing_classification_values() -> dict[str, list[str]]:
     return {
         "part_type": list(Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct()),
+        "part_subtype": list(Part.objects.exclude(part_subtype="").values_list("part_subtype", flat=True).distinct()),
         "packaging": list(Part.objects.exclude(packaging="").values_list("packaging", flat=True).distinct()),
     }
 
@@ -1247,6 +1328,8 @@ def _create_new_part(
     part_type,
     value,
     packaging,
+    part_subtype="",
+    manufacturer="",
     location_type="",
     location_name="",
     location_position="",
@@ -1254,10 +1337,11 @@ def _create_new_part(
     initial_quantity = quantity if quantity_mode == QUANTITY_MODE_ADD else 0
     return Part.objects.create(
         part_type=part_type,
+        part_subtype=part_subtype,
         value=value,
         packaging=packaging,
         description=description,
-        manufacturer="",
+        manufacturer=manufacturer,
         mf_part_no=mf_part_no,
         supplier=supplier,
         supplier_part_no=supplier_part_no,
@@ -1401,8 +1485,9 @@ def _overlay_post(payload, post):
             prefix = f"{doc_id}::{line['index']}"
             line["edit_quantity"] = post.get(f"quantity::{prefix}", str(line["quantity"]))
             line["edit_description"] = post.get(f"description::{prefix}", line.get("edit_description", line["description"]))
-            for field in ("part_type", "value", "packaging"):
+            for field in ("part_type", "part_subtype", "value", "packaging", "manufacturer"):
                 line[field] = post.get(f"{field}::{prefix}", line.get(field, ""))
+            line["edit_mf_part_no"] = post.get(f"mf_part_no::{prefix}", line.get("edit_mf_part_no", ""))
             line["project_id"] = post.get(f"project::{prefix}", "")
             line["location_type"] = post.get(f"location_type::{prefix}", "")
             line["location_name"] = post.get(f"location_name::{prefix}", "")
@@ -1429,6 +1514,7 @@ def _preview_context(payload):
         "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
         "known_part_types": sorted(existing["part_type"], key=str.casefold),
         "known_packagings": sorted(existing["packaging"], key=str.casefold),
+        "known_part_subtypes": sorted(existing["part_subtype"], key=str.casefold),
     }
 
 
@@ -1582,6 +1668,10 @@ def _confirm_documents(
             part_type = request.POST.get(f"part_type::{field_prefix}", line.get("part_type", "")).strip()
             value = request.POST.get(f"value::{field_prefix}", line.get("value", "")).strip()
             packaging = request.POST.get(f"packaging::{field_prefix}", line.get("packaging", "")).strip()
+            # Untertyp, Hersteller and Hersteller-Nr. only apply to newly created parts.
+            part_subtype = request.POST.get(f"part_subtype::{field_prefix}", line.get("part_subtype", ""))
+            manufacturer = request.POST.get(f"manufacturer::{field_prefix}", line.get("manufacturer", ""))
+            edited_mf_part_no = request.POST.get(f"mf_part_no::{field_prefix}", line.get("edit_mf_part_no", mf_part_no))
             line_project = _resolve_project_selection(
                 request.POST.get(f"project::{field_prefix}", ""),
                 fallback=_resolve_project_selection(batch_project_id, fallback=None),
@@ -1638,6 +1728,7 @@ def _confirm_documents(
                             "Zum Ändern bitte 'Lagerort ändern' ankreuzen oder den Lagerort leeren."
                         )
             else:
+                mf_part_no = " ".join(normalise_unicode_text(edited_mf_part_no).split())
                 part = _create_new_part(
                     quantity=quantity,
                     unit_price=unit_price,
@@ -1652,6 +1743,8 @@ def _confirm_documents(
                     part_type=_reuse_spelling(part_type, existing_types["part_type"]),
                     value=value,
                     packaging=_reuse_spelling(packaging, existing_types["packaging"]),
+                    part_subtype=_reuse_spelling(part_subtype, existing_types["part_subtype"]),
+                    manufacturer=" ".join(normalise_unicode_text(manufacturer).split()),
                     location_type=location.type,
                     location_name=location.name,
                     location_position=location.position,

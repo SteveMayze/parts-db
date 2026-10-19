@@ -156,6 +156,7 @@ class Part(models.Model):
         blank=True,
         db_index=True,
     )
+    part_subtype = models.CharField("Untertyp", max_length=100, blank=True, default="", db_index=True)
     value = models.CharField("Wert", max_length=100, blank=True, db_index=True)
     packaging = models.CharField(
         "Verpackung",
@@ -198,12 +199,20 @@ class Part(models.Model):
     updated_at = models.DateTimeField("Aktualisiert am", auto_now=True)
 
     class Meta:
-        ordering = ["part_type", "value", "packaging", "location_name"]
+        ordering = ["part_type", "part_subtype", "value", "packaging", "location_name"]
         verbose_name = "Bauteil"
         verbose_name_plural = "Bauteile"
 
     def __str__(self) -> str:
-        return f"{self.part_type or 'Nicht zugeordnet'} {self.value or ''} ({self.packaging or 'Nicht zugeordnet'})".strip()
+        type_label = self.part_type or "Nicht zugeordnet"
+        if self.part_subtype:
+            type_label = f"{type_label}/{self.part_subtype}"
+        return f"{type_label} {self.value or ''} ({self.packaging or 'Nicht zugeordnet'})".strip()
+
+    def save(self, *args, **kwargs):
+        self.part_type = (self.part_type or "").strip()
+        self.part_subtype = (self.part_subtype or "").strip()
+        return super().save(*args, **kwargs)
 
     @property
     def full_location(self) -> str:

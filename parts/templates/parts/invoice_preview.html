@@ -40,6 +40,7 @@
 
   <datalist id="known-part-types">{% for name in known_part_types %}<option value="{{ name }}"></option>{% endfor %}</datalist>
   <datalist id="known-location-names">{% for name in known_location_names %}<option value="{{ name }}"></option>{% endfor %}</datalist>
+  <datalist id="known-part-subtypes">{% for name in known_part_subtypes %}<option value="{{ name }}"></option>{% endfor %}</datalist>
   <datalist id="known-packagings">{% for name in known_packagings %}<option value="{{ name }}"></option>{% endfor %}</datalist>
 
   <form method="post">
@@ -152,12 +153,30 @@
               <label>Typ{% if line.part_type_suggested %} <small>(Vorschlag: {{ line.part_type_suggested }})</small>{% endif %}
                 <input type="text" list="known-part-types" name="part_type::{{ line.field_prefix }}" value="{{ line.part_type }}">
               </label>
+              {% if line.part %}
+                <div><strong>Untertyp</strong> <span class="match-name">{{ line.part.part_subtype|default:"-" }}</span></div>
+              {% else %}
+                <label>Untertyp
+                  <input type="text" list="known-part-subtypes" name="part_subtype::{{ line.field_prefix }}" value="{{ line.part_subtype }}">
+                </label>
+              {% endif %}
               <label>Wert{% if line.value_suggested %} <small>(Vorschlag: {{ line.value_suggested }})</small>{% endif %}
                 <input type="text" name="value::{{ line.field_prefix }}" value="{{ line.value }}">
               </label>
               <label>Verpackung{% if line.packaging_suggested %} <small>(Vorschlag: {{ line.packaging_suggested }})</small>{% endif %}
                 <input type="text" list="known-packagings" name="packaging::{{ line.field_prefix }}" value="{{ line.packaging }}">
               </label>
+              {% if line.part %}
+                <div><strong>Hersteller</strong> <span class="match-name">{{ line.part.manufacturer|default:"-" }}</span></div>
+                <div><strong>Hersteller-Nr.</strong> <span class="match-name">{{ line.part.mf_part_no|default:"-" }}</span></div>
+              {% else %}
+                <label>Hersteller
+                  <input type="text" name="manufacturer::{{ line.field_prefix }}" value="{{ line.manufacturer }}">
+                </label>
+                <label>Hersteller-Nr.
+                  <input type="text" name="mf_part_no::{{ line.field_prefix }}" value="{{ line.edit_mf_part_no }}">
+                </label>
+              {% endif %}
               <label>Projekt
                 <select name="project::{{ line.field_prefix }}">
                   <option value="">Batch-Vorgabe verwenden</option>
@@ -172,6 +191,7 @@
               <label class="match">Treffer
                 {% if line.part %}
                   <span class="match-name">{{ line.part.label }}</span>
+                  <small>Typ: {{ line.part.part_type|default:"-" }} / Untertyp: {{ line.part.part_subtype|default:"-" }}</small>
                   <select name="match::{{ line.field_prefix }}">
                     <option value="{{ line.part.pk }}" selected>{{ line.part.label }}</option>
                   </select>
