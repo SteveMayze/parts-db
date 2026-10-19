@@ -149,7 +149,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+# Explicit, including the prefix: Django only adds FORCE_SCRIPT_NAME to a relative
+# STATIC_URL per request, but under gunicorn the value is cached before that.
+STATIC_URL = f'{URL_PREFIX}/static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

@@ -21,7 +21,7 @@ def _settings_with_env(**env):
         "import sys, json; sys.path.insert(0, sys.argv[1]); import config.settings as s;"
         "print(json.dumps({k: getattr(s, k, None) for k in "
         "['FORCE_SCRIPT_NAME','SECURE_PROXY_SSL_HEADER','CSRF_TRUSTED_ORIGINS','ALLOWED_HOSTS',"
-        "'SESSION_COOKIE_NAME','CSRF_COOKIE_NAME','SESSION_COOKIE_PATH','CSRF_COOKIE_PATH']}))"
+        "'STATIC_URL','SESSION_COOKIE_NAME','CSRF_COOKIE_NAME','SESSION_COOKIE_PATH','CSRF_COOKIE_PATH']}))"
     )
     result = subprocess.run(
         [sys.executable, "-I", "-c", code, str(settings.BASE_DIR)],
@@ -42,6 +42,7 @@ class SettingsFromEnvironmentTests(TestCase):
         self.assertEqual(values["CSRF_TRUSTED_ORIGINS"], [])
         self.assertEqual(values["SESSION_COOKIE_PATH"], "/")
         self.assertEqual(values["CSRF_COOKIE_PATH"], "/")
+        self.assertEqual(values["STATIC_URL"], "/static/")
 
     def test_prefix_proxy_header_origins_and_cookies(self):
         values = _settings_with_env(
@@ -58,6 +59,7 @@ class SettingsFromEnvironmentTests(TestCase):
             values["CSRF_TRUSTED_ORIGINS"], ["https://example.test", "http://example.test:8888"]
         )
         self.assertEqual(values["ALLOWED_HOSTS"], ["example.test", "other.test"])
+        self.assertEqual(values["STATIC_URL"], f"{PREFIX}/static/")
         self.assertEqual(values["SESSION_COOKIE_NAME"], "partsdb_sessionid")
         self.assertEqual(values["CSRF_COOKIE_NAME"], "partsdb_csrftoken")
         self.assertEqual(values["SESSION_COOKIE_PATH"], PREFIX)
