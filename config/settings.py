@@ -21,6 +21,11 @@ def _env_list(name):
     return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
 
 
+def _env_flag(name):
+    """True for 1/true/yes/on; unset, empty, 0, false, no and off are False."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -46,10 +51,17 @@ if URL_PREFIX:
     FORCE_SCRIPT_NAME = URL_PREFIX
 
 # Behind a TLS-terminating proxy that sends X-Forwarded-Proto.
-if os.environ.get("DJANGO_BEHIND_TLS_PROXY"):
+if _env_flag("DJANGO_BEHIND_TLS_PROXY"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+
+# Secure cookies only when the site is really served over https (off by default).
+# HSTS stays 0 (off) until every device trusts the gateway's certificate.
+if _env_flag("DJANGO_HTTPS"):
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0") or 0)
 
 # Own cookie names and path so other apps on the same host name do not
 # overwrite or log out this one.
@@ -131,7 +143,8 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # A folder is mounted in production (SQLite writes journal files beside the database).
+        'NAME': os.environ.get("DJANGO_DB_PATH") or BASE_DIR / 'db.sqlite3',
     }
 }
 
@@ -166,7 +179,10 @@ AUTH_PASSWORD_VALIDATORS = [
 STATIC_URL = f'{URL_PREFIX}/static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+# Uploaded PDF originals (and tmp_imports). In production this is a mounted host folder.
+MEDIA_ROOT = os.environ.get("DJANGO_MEDIA_ROOT") or BASE_DIR / 'media'
+# Where `manage.py backup_db` writes its archives.
+BACKUP_DIR = os.environ.get("DJANGO_BACKUP_DIR") or BASE_DIR / 'backups'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

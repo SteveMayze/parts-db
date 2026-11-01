@@ -1,2 +1,16 @@
+# Copy to infra/inventory.ini (git-ignored) and replace the fake values.
+# Each login needs a DIFFERENT alias (first word): Ansible merges entries with the same name into one host.
+#
+# [partsdb_rootless] the rootless service user `homeapps`: used by every routine command (no sudo).
+[partsdb_rootless]
+partsdb-service ansible_host=your-host.example.com ansible_user=homeapps
+
+# [partsdb_admin]    your own admin login with sudo. Only needed to stop or remove the old rootful unit (phase R2/R3);
+#                    no playbook uses it, the commands are documented in docs/deployment.md.
+[partsdb_admin]
+partsdb-admin ansible_host=your-host.example.com ansible_user=your-admin-login
+
+# [partsdb] the OLD rootful setup (infra/deploy-playbook-podman-quadlet.yaml with `make deploy-podman`, uses sudo -K).
+# Kept as the rollback path until phase R3 removes it.
 [partsdb]
 your-host.example.com ansible_user=deploy-user

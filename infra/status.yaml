@@ -1,0 +1,37 @@
+---
+# Read-only overview of the deployment (no changes).  make status
+- name: Status of parts-db
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Gather facts about the service, the container, the timer, the backups and the rootless set-up
+      ansible.builtin.shell:
+        cmd: |
+          echo "--- deployed"; cat {{ data_root }}/DEPLOYED 2>&1
+          echo "--- who runs it (must be the service user, not root)"; id -un; podman info --format {% raw %}'rootless={{.Host.Security.Rootless}}'{% endraw %} 2>&1
+          echo "--- service";  systemctl --user is-active {{ container_name }}.service
+          echo "--- container health"; podman inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} {{ container_name }} 2>&1
+          echo "--- container processes (host user vs user inside)"; podman top {{ container_name }} huser user pid args 2>&1 | head -6
+          echo "--- owner and mode of the data folders (numeric ids)"; ls -lnd {{ data_root }}/data {{ data_root }}/media {{ data_root }}/backups 2>&1
+          echo "--- linger"; loginctl show-user {{ service_user }} --property=Linger 2>&1
+          echo "--- limits applied (memory bytes, pids)"; podman inspect --format {% raw %}'memory={{.HostConfig.Memory}} pids={{.HostConfig.PidsLimit}}'{% endraw %} {{ container_name }} 2>&1
+          echo "--- backup timer"; systemctl --user list-timers {{ app_name }}-backup.timer --no-pager 2>&1 | head -3
+          echo "--- last backup run"; systemctl --user show {{ app_name }}-backup.service -p Result -p ExecMainExitTimestamp 2>&1
+          echo "--- backups (newest first)"; ls -lt {{ data_root }}/backups 2>&1 | head -8
+          echo "--- disk"; du -sh {{ data_root }}/data {{ data_root }}/media {{ data_root }}/backups 2>&1
+          echo "--- http probe"; curl -s -m 5 -w " [http=%{http_code}]" http://127.0.0.1:{{ app_port }}/health/ 2>&1; echo
+          echo "--- images"; podman images {{ image_repo }} --format {% raw %}'{{.Tag}}  {{.CreatedAt}}  {{.Size}}'{% endraw %} 2>&1
+        executable: /bin/bash
+      register: status
+      changed_when: false
+      failed_when: false
+
+    - name: Show
+      ansible.builtin.debug:
+        msg: "{{ status.stdout_lines }}"

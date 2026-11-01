@@ -80,7 +80,7 @@ UI entry points:
 - `Projekte` provides project management (create/edit/activate/deactivate/delete).
 - `Historie` on a part row shows its purchase history.
 
-For production backups, back up the SQLite file (or database host) and the `media/` folder together so the PDF originals and the database remain in sync. In the Docker/Ansible deployment this folder should live on the same persistent volume as the app data.
+For production backups, the database and the `media/` folder are always backed up together (`manage.py backup_db`, daily on the server) so the PDF originals and the database remain in sync. In the Podman deployment `media/` is a mounted host folder, see [docs/deployment.md](docs/deployment.md).
 
 ## Type and subtype (Typ / Untertyp)
 
@@ -181,150 +181,46 @@ Imported documents are tracked in `ImportedDocument` (unique supplier + document
 - Net unit price is derived from gross totals using the VAT factor from the document totals.
 - `WHG` is parsed as a raw column value and used only for preview notes.
 
-## Deploying to your host (Docker + Ansible)
+## Deploying to your host (rootless Podman)
 
-This follows the Testing Goat style from chapters 9–12: containerize, production settings via env vars, and automate deployment.
+The app runs as a **rootless** Podman container of the ordinary Linux user `homeapps`, started by that user's own systemd. Deploying, updating, backing up and restoring need **no sudo password**: you log in by SSH key only. The Caddy reverse proxy lives in the separate [`cornil-gateway`](https://github.com/SteveMayze/cornil-gateway) repository; the app joins its Podman network `gateway` and is reached there as `parts-db-web:8000`.
 
-### One-time local setup
+Everything you import is stored in two folders on the host that are mounted into the container, so a restart, redeploy or image change never loses it:
 
-1. Install Ansible into your local venv:
-   ```bash
-   pip install ansible
-   ```
-2. Install required Ansible collections:
-   ```bash
-   ansible-galaxy collection install -r infra/requirements.yml
-   ```
-3. Create deployment vars:
-   ```bash
-   cp infra/group_vars/all.yml.example infra/group_vars/all.yml
-   ```
-4. Create a local inventory (kept out of git):
-   ```bash
-   cp infra/inventory.ini.example infra/inventory.local.ini
-   ```
-5. Edit `infra/group_vars/all.yml` and set real values for:
-   - `django_secret_key`
-   - `django_allowed_host` (or `django_allowed_hosts`, plus the proxy variables below)
-   - `app_port` (optional)
-6. Edit `infra/inventory.local.ini` and set your deployment target host and user.
+- `/home/homeapps/parts-db/data`: the SQLite database
+- `/home/homeapps/parts-db/media`: the uploaded PDF originals
 
-Optional helper commands (from project root):
+A daily backup (database and PDFs together, verified) is taken by a systemd user timer.
 
 ```bash
-make ansible-setup
-make deploy-docker
-make deploy-podman
+cp infra/inventory.ini.example infra/inventory.ini    # then edit: host name and user (git-ignored)
+make ansible-setup      # once: Ansible into .venv
+make syntax             # checks the playbooks
+make deploy             # builds the committed revision on the server and (re)starts the app
+make createsuperuser    # first run only: create your login
+make status | backup-now | fetch-backup | restore-drill | restore BACKUP=... | rollback
 ```
 
-### Deploy
+Plain-language background: [docs/podman-explained.md](docs/podman-explained.md). Design, first deployment, updating, backups, restore, rollback, reloading data after an empty start and troubleshooting: [docs/deployment.md](docs/deployment.md). Decisions: [docs/adr/](docs/adr/).
 
-From project root:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/deploy-playbook.yaml -vv
-```
-
-If your host requires a sudo password (typical on first run), use:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/deploy-playbook.yaml -K -vv
-```
-
-What it does:
-- SSHes to your configured `ansible_user@inventory_hostname`
-- installs Docker
-- syncs project source to the host
-- builds the Docker image remotely
-- runs migrations + `collectstatic`
-- starts/restarts the app container
-- smoke-checks `http://<your-host>:<app_port>/parts/`
-
-### Secrets and safety
-
-- `infra/group_vars/all.yml` is ignored by git and must stay local.
-- Do not commit real secret keys.
-- You can rotate `django_secret_key` by updating that file and re-running deploy.
-
-### Optional: passwordless sudo for unattended deploys
-
-If you want deploys to run without `-K`, configure passwordless sudo on the host.
-
-1. On your deployment host, as root:
-   ```bash
-   visudo -f /etc/sudoers.d/<deploy-user>-ansible
-   ```
-2. Add:
-   ```text
-   <deploy-user> ALL=(ALL) NOPASSWD:ALL
-   ```
-3. Set secure permissions:
-   ```bash
-   chmod 440 /etc/sudoers.d/<deploy-user>-ansible
-   ```
-4. Validate from your local machine:
-   ```bash
-   ssh <deploy-user>@<your-host> 'sudo -n true && echo ok'
-   ```
-
-Use a dedicated deployment user with scoped sudo rules for stricter security.
-
-## Deploying with Podman + Quadlet (alternative to Docker)
-
-This path keeps the current Docker workflow intact and adds a Podman-based deployment using a system Quadlet unit.
-
-Run:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/deploy-playbook-podman-quadlet.yaml -K -vv
-```
-
-What it does:
-- installs Podman
-- syncs project source to the host
-- builds the image with Podman (rootful, same storage as system service)
-- runs migrations + `collectstatic` with Podman (rootful)
-- writes a Quadlet file at `/etc/containers/systemd/parts-db.container`
-- enables/restarts `parts-db.service`
-- smoke-checks `http://<your-host>:<app_port>/parts/`
+The old rootful playbooks (`make deploy-podman`, `make deploy-docker`) still exist as a rollback path and are removed in a later phase; do not use them for new deployments.
 
 ## Reverse proxy and URL prefix
 
-The reverse proxy (Caddy, TLS, routing) is **not** part of this repository. It is owned by the separate `cornil-gateway` repository, which serves several apps on one host. Older Caddy playbooks and Makefile targets from this repo are available in git history only.
-
-The gateway forwards `https://<host>/parts-db/...` to this app and strips the `/parts-db` prefix. Configure the app with these deployment variables (see `infra/group_vars/all.yml.example`), which the Quadlet playbook writes to a root-only environment file on the host:
+The reverse proxy (Caddy, TLS, routing) is **not** part of this repository; see `cornil-gateway`. It forwards `https://<host>/parts-db/...` to this app and strips the `/parts-db` prefix. The deployment variables are in `infra/group_vars/partsdb_rootless.yml`:
 
 | Variable | Environment variable | Purpose |
 | --- | --- | --- |
 | `url_prefix` | `DJANGO_URL_PREFIX` | e.g. `/parts-db`; generates prefixed links, redirects, static URLs; empty = site root |
 | `behind_tls_proxy` | `DJANGO_BEHIND_TLS_PROXY` | trust `X-Forwarded-Proto` from the proxy |
-| `django_allowed_hosts` | `DJANGO_ALLOWED_HOSTS` | accepted host names |
+| `allowed_hosts` | `DJANGO_ALLOWED_HOSTS` | accepted host names |
 | `csrf_trusted_origins` | `DJANGO_CSRF_TRUSTED_ORIGINS` | accepted origins for form posts |
-| `listen_address` | (Quadlet `PublishPort`) | address of the published port; empty = all interfaces |
+| `use_https` | `DJANGO_HTTPS` | Secure session/CSRF cookies (off until the plain port is closed) |
+| `hsts_seconds` | `DJANGO_HSTS_SECONDS` | HSTS; stays 0 until the owner decides |
 
-Session and CSRF cookies are named `partsdb_sessionid` / `partsdb_csrftoken` and limited to the prefix path, so other apps on the same host do not log this one out. The app also accepts the prefix on its own port, so `http://<host>:<app_port>/parts/` and `.../parts-db/parts/` both work.
+Paths are set by `DJANGO_DB_PATH` (database file), `DJANGO_MEDIA_ROOT` (PDF folder) and `DJANGO_BACKUP_DIR` (backups); without them the app uses `db.sqlite3` and `media/` in the project folder as before. `GET /health/` answers `ok` and is used by the container's health check.
 
-## Why "server not found" can happen
-
-For this host, deployment still requires one successful privileged setup run because base packages are missing:
-- no Docker/Podman installed
-- Python lacks `pip` and `venv` modules
-
-So either deployment path needs sudo once to install prerequisites. Use `-K` on the first run:
-
-```bash
-ansible-playbook -i infra/inventory.local.ini infra/deploy-playbook-podman-quadlet.yaml -K -vv
-```
-
-Then verify from the host:
-
-```bash
-ssh <deploy-user>@<your-host> 'sudo systemctl status parts-db.service --no-pager -l'
-ssh <deploy-user>@<your-host> 'sudo ss -ltn | grep <app_port>'
-```
-
-And from your client:
-- `http://<your-host>:<app_port>/parts/`
+Session and CSRF cookies are named `partsdb_sessionid` / `partsdb_csrftoken` and limited to the prefix path, so other apps on the same host do not log this one out. The app also accepts the prefix on its own port.
 
 ## Notes
 

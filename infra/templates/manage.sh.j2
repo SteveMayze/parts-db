@@ -1,0 +1,10 @@
+#!/bin/sh
+# Managed by Ansible (infra/deploy.yaml). Runs one Django management command in a throw-away container
+# with the production settings and the real data folders. Run as the service user (no sudo needed):
+#   parts-db-manage createsuperuser
+#   parts-db-manage changepassword <user>
+#   parts-db-manage backup_db --label manual --prune
+set -eu
+TTY=""
+[ -t 0 ] && [ -t 1 ] && TTY="-it"
+exec /usr/bin/podman run $TTY {{ podman_run_flags }} {{ image_repo }}:current python manage.py "$@"

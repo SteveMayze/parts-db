@@ -1,0 +1,56 @@
+---
+# Non-secret settings of the ROOTLESS deployment (group `partsdb_rootless`). No secrets here: the Django SECRET_KEY is
+# generated on the server on the first deploy. The host name comes from the git-ignored infra/inventory.ini.
+# Everything runs as the ordinary Linux user `service_user`, not as root (see docs/podman-explained.md).
+app_name: parts-db
+container_name: parts-db-web
+image_repo: localhost/parts-db
+app_uid: 10001                       # the user INSIDE the container; must match the user in the Dockerfile
+app_port: 8891                       # loopback port on the server (health probes only)
+listen_address: 127.0.0.1            # loopback only; the gateway reaches the app by name on the gateway network
+public_host: "{{ ansible_host | default(inventory_hostname) }}"
+use_https: false                     # becomes true in phase R3 (Secure cookies), once the plain port 8888 is closed
+public_scheme: "{{ 'https' if use_https else 'http' }}"
+
+# --- The service user and where everything lives (all inside its home folder) ---
+service_user: homeapps               # logs in by SSH key only; created once by the Tax repo's bootstrap
+service_home: "/home/{{ service_user }}"
+data_root: "{{ service_home }}/{{ app_name }}"          # data/ media/ backups/ build/ config/ (never the Tax app's folder)
+etc_dir: "{{ data_root }}/config"                       # holds the secret file `env` (mode 0600, owned by the service user)
+quadlet_dir: "{{ service_home }}/.config/containers/systemd"   # Quadlet container files for the user's systemd
+unit_dir: "{{ service_home }}/.config/systemd/user"            # ordinary user units (the backup service and timer)
+bin_dir: "{{ service_home }}/bin"
+
+# keep-id with explicit uid/gid: the host user `service_user` appears INSIDE the container as uid/gid 10001, so the
+# mounted folders, owned by the service user on the host, are writable by the container's unprivileged app user.
+container_userns: "keep-id:uid={{ app_uid }},gid={{ app_uid }}"
+
+# --- URL prefix and reverse proxy. The gateway strips the prefix; the app also accepts it (ADR 0001).
+url_prefix: /parts-db
+behind_tls_proxy: true               # the gateway (Caddy) sends X-Forwarded-Proto; the app trusts that header
+gateway_network: gateway.network     # Quadlet network file owned by the separate gateway repository (same service user)
+extra_allowed_hosts: []
+# Plain-HTTP origin of the old published port: removed again in phase R3.
+extra_csrf_origins: ["https://{{ public_host }}", "http://{{ public_host }}:8888"]
+hsts_seconds: 0                      # keep 0 until the owner says otherwise
+allowed_hosts: "{{ ([public_host, 'localhost', '127.0.0.1'] + extra_allowed_hosts) | join(',') }}"
+csrf_trusted_origins: "{{ extra_csrf_origins | join(',') }}"
+
+memory_limit: 512m
+backup_time: "03:15:00"
+keep_images: 5
+
+# Flags shared by every one-off `podman run` (migrate, backup, restore): same mounts, user mapping and environment as the service.
+podman_run_flags: >-
+  --rm --read-only --tmpfs /tmp --cap-drop=ALL --security-opt=no-new-privileges
+  --userns={{ container_userns }} --user {{ app_uid }}:{{ app_uid }}
+  --env-file {{ etc_dir }}/env
+  -e DJANGO_DEBUG_FALSE=1
+  -e DJANGO_DB_PATH=/data/db.sqlite3 -e DJANGO_MEDIA_ROOT=/media -e DJANGO_BACKUP_DIR=/backups
+  -e DJANGO_ALLOWED_HOSTS={{ allowed_hosts }}
+  -e DJANGO_CSRF_TRUSTED_ORIGINS={{ csrf_trusted_origins }}
+  -e DJANGO_HTTPS={{ '1' if use_https else '0' }}
+  -e DJANGO_URL_PREFIX={{ url_prefix }}
+  -e DJANGO_BEHIND_TLS_PROXY={{ '1' if behind_tls_proxy else '0' }}
+  -e DJANGO_HSTS_SECONDS={{ hsts_seconds }}
+  -v {{ data_root }}/data:/data -v {{ data_root }}/media:/media -v {{ data_root }}/backups:/backups

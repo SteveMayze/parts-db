@@ -1,0 +1,22 @@
+---
+# Takes a verified backup (database and PDFs together) right now, on the server.  make backup-now
+- name: Back up parts-db now
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Take and verify the backup (label manual)
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py backup_db --label manual
+      register: made
+      changed_when: "'BACKUP_CREATED' in made.stdout"
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ made.stdout_lines }}"

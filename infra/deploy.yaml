@@ -1,0 +1,284 @@
+---
+# Deploys the COMMITTED revision (git archive: untracked files, local/ and databases can never be shipped).
+# ROOTLESS Podman + Quadlet, run as the ordinary service user: no sudo, no -K. Own image, container name, data folders
+# and loopback port; the secret in a file only the service user can read; non-root user inside the container,
+# read-only root file system, dropped capabilities. Data folders are only ever created, never removed or emptied.
+# Run with:  make deploy
+- name: Deploy parts-db
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  vars:
+    repo_root: "{{ playbook_dir }}/.."
+    app_commit: "{{ lookup('pipe', 'git -C ' ~ repo_root ~ ' rev-parse --short=12 HEAD') }}"
+    dirty_tree: "{{ lookup('pipe', 'git -C ' ~ repo_root ~ ' status --porcelain --untracked-files=no') }}"
+    allow_dirty: false
+    image_new: "{{ image_repo }}:{{ app_commit }}"
+    build_dir: "{{ data_root }}/build/{{ app_commit }}"
+    archive_dir: "{{ repo_root }}/local/build"
+    archive_local: "{{ archive_dir }}/{{ app_name }}-{{ app_commit }}.tar.gz"
+    quadlet_file: "{{ quadlet_dir }}/{{ container_name }}.container"
+
+  pre_tasks:
+    - name: Refuse to deploy uncommitted changes (the deployment is exactly the committed revision)
+      ansible.builtin.assert:
+        that: allow_dirty | bool or dirty_tree | length == 0
+        fail_msg: "Tracked files have uncommitted changes. Commit first, or pass -e allow_dirty=true to deploy HEAD anyway."
+      delegate_to: localhost
+      run_once: true
+
+    - name: Refuse any data_root other than this app's own folder (the Tax app lives next to it in the same home folder)
+      ansible.builtin.assert:
+        that:
+          - app_name == 'parts-db'
+          - data_root == service_home ~ '/parts-db'
+          - container_name == 'parts-db-web'
+          - image_repo == 'localhost/parts-db'
+        fail_msg: "data_root must be {{ service_home }}/parts-db for the app parts-db; nothing was changed."
+
+    - name: Check connectivity
+      ansible.builtin.ping:
+
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Look for the gateway network file (created by the separate gateway repository, in the same Quadlet folder)
+      ansible.builtin.stat:
+        path: "{{ quadlet_dir }}/{{ gateway_network }}"
+      register: gateway_network_file
+
+    - name: The gateway network must exist before this app can join it
+      ansible.builtin.assert:
+        that: gateway_network_file.stat.exists
+        fail_msg: >-
+          {{ quadlet_dir }}/{{ gateway_network }} does not exist. The app joins the network that the separate gateway
+          repository creates; deploy the gateway first (nothing was changed here). See docs/deployment.md.
+
+    - name: Check that Podman is installed (nothing is installed or upgraded by this playbook)
+      ansible.builtin.command: podman --version
+      changed_when: false
+      register: podman_version
+
+  tasks:
+    - name: Create the config and data directories (private to the service user; existing ones are left as they are)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ data_root }}"
+        - "{{ etc_dir }}"
+        - "{{ data_root }}/build"
+        - "{{ data_root }}/data"
+        - "{{ data_root }}/media"
+        - "{{ data_root }}/backups"
+        - "{{ bin_dir }}"
+        - "{{ quadlet_dir }}"
+        - "{{ unit_dir }}"
+
+    - name: Generate the Django SECRET_KEY on the server (only if it does not exist yet; never overwritten, never shown)
+      ansible.builtin.shell:
+        cmd: >-
+          umask 077 &&
+          python3 -c 'import secrets; print("DJANGO_SECRET_KEY=" + secrets.token_urlsafe(64))' > {{ etc_dir }}/env
+        creates: "{{ etc_dir }}/env"
+      no_log: true
+
+    - name: Make sure the secret file can only be read by the service user
+      ansible.builtin.file:
+        path: "{{ etc_dir }}/env"
+        mode: "0600"
+      when: not ansible_check_mode      # in --check mode the file is only simulated above
+
+    - name: Is there an image from a previous deploy?
+      ansible.builtin.command: "podman image exists {{ image_repo }}:current"
+      register: current_image
+      failed_when: false
+      changed_when: false
+
+    - name: Is there a database already?
+      ansible.builtin.stat:
+        path: "{{ data_root }}/data/db.sqlite3"
+      register: db_file
+
+    # A dry run (--check) cannot build or start anything, so everything after this point depends on results it cannot
+    # produce. It stops here, after proving the connection, the preconditions and the folder/secret steps.
+    - name: Dry run stops here (the build and start steps cannot be simulated)
+      ansible.builtin.meta: end_host
+      when: ansible_check_mode
+
+    - name: Local folder for the archive (git-ignored)
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ archive_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Package the committed revision (git archive)
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.command: >-
+        git -C {{ repo_root }} archive --format=tar.gz --prefix=src/ -o {{ archive_local }} HEAD
+      changed_when: true
+
+    - name: Create the build directory
+      ansible.builtin.file:
+        path: "{{ build_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Unpack the revision on the server
+      ansible.builtin.unarchive:
+        src: "{{ archive_local }}"
+        dest: "{{ build_dir }}"
+
+    - name: The unpacked revision must contain what the build needs (guards against a partial archive)
+      ansible.builtin.stat:
+        path: "{{ build_dir }}/src/{{ item }}"
+      register: unpacked
+      loop: [Dockerfile, manage.py, healthcheck.py, requirements.txt, config/settings.py, parts/models.py]
+      failed_when: not unpacked.stat.exists
+
+    - name: Build the image as the service user (installs the requirements from PyPI)
+      ansible.builtin.command:
+        cmd: >-
+          podman build --build-arg GIT_COMMIT={{ app_commit }}
+          -t {{ image_new }} -f Dockerfile .
+        chdir: "{{ build_dir }}/src"
+      changed_when: true
+
+    - name: Remember the image that is live now
+      ansible.builtin.command: "podman image inspect --format {% raw %}'{{.Id}}'{% endraw %} {{ image_repo }}:current"
+      register: live_image_id
+      when: current_image.rc == 0
+      changed_when: false
+
+    - name: Id of the new image
+      ansible.builtin.command: "podman image inspect --format {% raw %}'{{.Id}}'{% endraw %} {{ image_new }}"
+      register: new_image_id
+      changed_when: false
+
+    # The backup runs with the NEW image on purpose (its environment comes from this revision) and before migrations, so
+    # it captures database and PDFs exactly as they were before this deploy. Nothing live has changed yet.
+    - name: Back up before changing anything (database and PDFs together, verified; uses the newly built image)
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_new }}
+        python manage.py backup_db --label pre-deploy
+      register: pre_backup
+      when: db_file.stat.exists
+      changed_when: "'BACKUP_CREATED' in pre_backup.stdout"
+
+    - name: Keep the live image as 'previous' (for rollback) unless it is the same image
+      ansible.builtin.command: "podman tag {{ image_repo }}:current {{ image_repo }}:previous"
+      when: current_image.rc == 0 and live_image_id.stdout != new_image_id.stdout
+      changed_when: true
+
+    - name: Point 'current' at the new image
+      ansible.builtin.command: "podman tag {{ image_new }} {{ image_repo }}:current"
+      changed_when: true
+
+    - name: Production configuration check (fails on errors, warnings listed; HSTS/redirect warnings are expected)
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py check --deploy --fail-level ERROR
+      register: deploy_check
+      changed_when: false
+
+    - name: Apply database migrations (creates the database on the first deploy)
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py migrate --noinput
+      register: migrate
+      changed_when: "'No migrations to apply' not in migrate.stdout"
+
+    - name: Install the Quadlet unit (in the service user's own folder)
+      ansible.builtin.template:
+        src: parts-db-web.container.j2
+        dest: "{{ quadlet_file }}"
+        mode: "0644"
+
+    - name: Install the backup service and timer (systemd user units)
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ unit_dir }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - parts-db-backup.service
+        - parts-db-backup.timer
+
+    - name: Install the management wrapper (for createsuperuser, changepassword, manual backups)
+      ansible.builtin.template:
+        src: manage.sh.j2
+        dest: "{{ bin_dir }}/{{ app_name }}-manage"
+        mode: "0750"
+
+    - name: Reload the user's systemd (generates the service from the Quadlet file)
+      ansible.builtin.systemd:
+        scope: user
+        daemon_reload: true
+
+    - name: Start (or restart onto the new image) the web service
+      ansible.builtin.systemd:
+        scope: user
+        name: "{{ container_name }}.service"
+        state: restarted
+
+    - name: Enable the daily backup timer
+      ansible.builtin.systemd:
+        scope: user
+        name: "{{ app_name }}-backup.timer"
+        enabled: true
+        state: started
+
+    - name: Wait until the container reports healthy
+      ansible.builtin.command: "podman inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} {{ container_name }}"
+      register: health
+      until: health.stdout == 'healthy'
+      retries: 45
+      delay: 4
+      changed_when: false
+
+    - name: The health endpoint answers on the loopback port
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health/"
+        status_code: 200
+      register: health_http
+
+    - name: Record this deployment
+      ansible.builtin.copy:
+        dest: "{{ data_root }}/DEPLOYED"
+        mode: "0644"
+        content: |
+          commit={{ app_commit }}
+          image_id={{ new_image_id.stdout }}
+          previous_image_id={{ live_image_id.stdout | default('none') }}
+          port={{ app_port }}
+          deployed_utc={{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+    - name: Find old parts-db images to remove (keep current, previous and the newest {{ keep_images }} builds; only {{ image_repo }})
+      ansible.builtin.shell:
+        cmd: >-
+          podman images {{ image_repo }} --format {% raw %}'{{.Tag}}'{% endraw %}
+          | grep -vE '^(current|previous|latest|rolled-back|<none>)$' | tail -n +{{ keep_images + 1 }}
+        executable: /bin/bash
+      register: old_images
+      changed_when: false
+      failed_when: false
+
+    - name: Remove old parts-db images (best effort; an image in use is left alone)
+      ansible.builtin.command: "podman rmi {{ image_repo }}:{{ item }}"
+      loop: "{{ old_images.stdout_lines }}"
+      failed_when: false
+      changed_when: true
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Deployed commit {{ app_commit }} (rootless, user {{ service_user }})"
+          - "Pre-deploy backup: {{ (pre_backup.stdout | default('none (first deploy)')).strip() }}"
+          - "Migrations: {{ 'applied' if migrate.changed else 'already up to date' }}"
+          - "Probe: http://127.0.0.1:{{ app_port }}/health/ on the server (use an ssh tunnel, see docs/deployment.md)"
+          - "First deploy: create your login with: make createsuperuser"

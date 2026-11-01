@@ -1,0 +1,69 @@
+---
+# Proves a backup is restorable WITHOUT touching live data: restores into a temporary in-memory directory inside a
+# throw-away container, checks integrity, and confirms the restored database is a valid, fully migrated app database.
+#   make restore-drill            (newest backup)        make restore-drill BACKUP=backup-....tar.gz
+- name: Restore drill (non-destructive)
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Find the newest backup
+      ansible.builtin.find:
+        paths: "{{ data_root }}/backups"
+        patterns: "backup-*.tar.gz"
+      register: found
+      when: backup_file is not defined
+
+    - name: Choose the backup
+      ansible.builtin.set_fact:
+        drill_file: "{{ backup_file | default((found.files | sort(attribute='mtime') | last).path | basename) }}"
+
+    - name: Verify and restore into a temporary directory, then check the restored database
+      ansible.builtin.command:
+        argv:
+          - podman
+          - run
+          - --rm
+          - --read-only
+          - --tmpfs
+          - /tmp
+          - --cap-drop=ALL
+          - --security-opt=no-new-privileges
+          - "--userns={{ container_userns }}"
+          - --user
+          - "{{ app_uid }}:{{ app_uid }}"
+          - --env-file
+          - "{{ etc_dir }}/env"
+          - -e
+          - DJANGO_DEBUG_FALSE=1
+          - -e
+          - DJANGO_BACKUP_DIR=/backups
+          - -e
+          - "DJANGO_ALLOWED_HOSTS={{ allowed_hosts }}"
+          - -v
+          - "{{ data_root }}/backups:/backups:ro"
+          - "{{ image_repo }}:current"
+          - sh
+          - -c
+          - >-
+            python manage.py restore_backup "$1" &&
+            python manage.py restore_backup "$1" --target-db /tmp/drill/db.sqlite3 --target-media /tmp/drill/media &&
+            DJANGO_DB_PATH=/tmp/drill/db.sqlite3 DJANGO_MEDIA_ROOT=/tmp/drill/media python manage.py migrate --check &&
+            echo DRILL_OK
+          - sh
+          - "{{ drill_file }}"
+      register: drill
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ drill.stdout_lines }}"
+
+    - name: The drill must end with DRILL_OK
+      ansible.builtin.assert:
+        that: "'DRILL_OK' in drill.stdout"
