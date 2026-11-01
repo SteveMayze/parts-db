@@ -154,6 +154,11 @@ class PrefixedRoutingTests(TestCase):
         response = self.client.get("/parts-db/")
         self.assertEqual(response["Location"], f"{PREFIX}/parts/")
 
+    def test_admin_login_redirect_does_not_double_the_prefix_for_direct_access(self):
+        # Opening /parts-db/admin/ on the app's own port (an ssh tunnel) must not produce /parts-db/parts-db/...
+        response = self.client.get("/parts-db/admin/")
+        self.assertEqual(response["Location"], f"{PREFIX}/admin/login/?next={PREFIX}/admin/")
+
     def test_named_login_urls_carry_prefix(self):
         from django.shortcuts import resolve_url
 
