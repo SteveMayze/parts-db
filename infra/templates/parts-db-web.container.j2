@@ -1,0 +1,56 @@
+# Managed by Ansible (infra/deploy.yaml). Do not edit by hand: changes are overwritten on the next deploy.
+# A ROOTLESS Quadlet file: it lives in the service user's ~/.config/containers/systemd/ and is run by that user's
+# systemd (systemctl --user). Quadlet adds the user-level "wait for network" dependency by itself.
+[Unit]
+Description=Parts DB web app (rootless Podman Quadlet)
+
+[Container]
+Image={{ image_repo }}:current
+ContainerName={{ container_name }}
+# Published on the server's loopback only (listen_address), for the health probes; the LAN cannot reach it. The gateway
+# reaches the app by name on the gateway network instead (see Network= below).
+PublishPort={{ listen_address }}:{{ app_port }}:8000
+# Joins the gateway network (created by the separate gateway repository), so the reverse proxy reaches this container by
+# name ({{ container_name }}:8000, the port INSIDE the container). Quadlet makes this unit wait for gateway.network.
+Network={{ gateway_network }}
+# The only mounted folders: database (a folder, SQLite writes journal files beside it), PDF originals, backups.
+Volume={{ data_root }}/data:/data
+Volume={{ data_root }}/media:/media
+Volume={{ data_root }}/backups:/backups
+# The host service user appears in the container as the app user (see container_userns in group_vars).
+UserNS={{ container_userns }}
+User={{ app_uid }}
+Group={{ app_uid }}
+# SECRET_KEY lives only in this 0600 file owned by the service user, never in this unit file.
+EnvironmentFile={{ etc_dir }}/env
+Environment=DJANGO_DEBUG_FALSE=1
+Environment=DJANGO_DB_PATH=/data/db.sqlite3
+Environment=DJANGO_MEDIA_ROOT=/media
+Environment=DJANGO_BACKUP_DIR=/backups
+Environment=DJANGO_ALLOWED_HOSTS={{ allowed_hosts }}
+Environment=DJANGO_CSRF_TRUSTED_ORIGINS={{ csrf_trusted_origins }}
+Environment=DJANGO_HTTPS={{ '1' if use_https else '0' }}
+Environment=DJANGO_URL_PREFIX={{ url_prefix }}
+Environment=DJANGO_BEHIND_TLS_PROXY={{ '1' if behind_tls_proxy else '0' }}
+Environment=DJANGO_HSTS_SECONDS={{ hsts_seconds }}
+ReadOnly=true
+Tmpfs=/tmp
+NoNewPrivileges=true
+DropCapability=ALL
+PodmanArgs=--memory={{ memory_limit }} --pids-limit=256
+# A script, not an inline command: Quadlet re-quotes inline commands and breaks them.
+HealthCmd=python /app/healthcheck.py
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=20s
+HealthOnFailure=restart
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+
+[Install]
+# default.target is what a user's systemd starts at boot (with linger) and at login.
+WantedBy=default.target

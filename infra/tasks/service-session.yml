@@ -1,0 +1,34 @@
+---
+# Shared first step of every playbook: confirm we are the rootless service user with a working user-level systemd,
+# and learn its numeric id (needed to point systemctl --user and podman at the right runtime folder).
+# Included from each playbook; nothing here changes anything.
+- name: Which user are we, and what is its numeric id?
+  ansible.builtin.command: id -u
+  register: service_uid_raw
+  changed_when: false
+  check_mode: false
+
+- name: Remember the numeric id
+  ansible.builtin.set_fact:
+    service_uid: "{{ service_uid_raw.stdout | trim }}"
+
+- name: We must be connected as the service user, not as root or as the admin login
+  ansible.builtin.command: id -un
+  register: whoami
+  changed_when: false
+  check_mode: false
+  failed_when: whoami.stdout | trim != service_user
+
+- name: Linger must be on (set once by the administrator, see docs/deployment.md), or the container would stop when the last session ends
+  ansible.builtin.command: "loginctl show-user {{ service_user }} --property=Linger --value"
+  register: linger
+  changed_when: false
+  check_mode: false
+  failed_when: linger.stdout | trim != 'yes'
+
+- name: The user's own systemd must be running
+  ansible.builtin.command: systemctl --user is-system-running
+  register: user_systemd
+  changed_when: false
+  check_mode: false
+  failed_when: user_systemd.stdout | trim not in ['running', 'degraded']

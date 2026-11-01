@@ -18,3 +18,7 @@ CLAUDE.md
 docs/prompts/
 .claude
 db.sqlite3.bak-*
+
+# Backups fetched from the server, and any local backup folder
+local/
+backups/

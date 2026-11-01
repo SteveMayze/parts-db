@@ -17,4 +17,7 @@ class StripUrlPrefixMiddleware:
         prefix = self.prefix
         if prefix and (request.path_info == prefix or request.path_info.startswith(prefix + "/")):
             request.path_info = request.path_info[len(prefix):] or "/"
+            # request.path was built as script prefix + the original path_info, so it now carries the prefix twice
+            # (it feeds next=... on the login redirect).
+            request.path = prefix + request.path_info
         return self.get_response(request)

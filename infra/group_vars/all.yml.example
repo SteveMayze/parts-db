@@ -1,3 +1,5 @@
+# LEGACY (rootful setup, kept as the rollback path until phase R3 removes it). The rootless deployment uses
+# infra/group_vars/partsdb_rootless.yml instead and needs no secrets file.
 # Copy this file to infra/group_vars/all.yml and set real secret values.
 django_secret_key: "replace-with-long-random-secret"
 

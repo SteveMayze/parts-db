@@ -29,7 +29,22 @@ This file tracks small, test-first increments inspired by *Obey the Testing Goat
 - [x] Container error logging; `feature/part-subtype` (Untertyp) merged into `main`
 - [x] Verified through the gateway and on the direct port; gateway `make smoke` passes
 - [ ] Not done: rotate the secret key (owner decision, deferred)
-- [ ] Later, separate phase: move to rootless Podman, join the gateway network, then close the published port to loopback
+- [~] Rootless / join the gateway network / close the port: see the phase below
+
+## Rootless Podman phase (version 2 plan, `docs/prompts/PARTSDB-ROOTLESS-2.md`)
+
+Decision: no data migration. The PDF folder was never mounted in the rootful container, so PDF originals (all 38 documents) are already lost; the owner reloads data through the CSV and PDF imports. See `docs/adr/0002-rootless-podman-under-homeapps.md`.
+
+### R1 prepared and rehearsed (2026-11-01; nothing deployed)
+- [x] App: `DJANGO_DB_PATH`, `DJANGO_MEDIA_ROOT`, `DJANGO_BACKUP_DIR`, `DJANGO_HTTPS`, `DJANGO_HSTS_SECONDS`; `/health/`; `DJANGO_BEHIND_TLS_PROXY=0` now means off
+- [x] Dockerfile: non-root user 10001, `collectstatic` at build, `healthcheck.py`; `.containerignore`
+- [x] `parts/backup.py` + `backup_db` / `restore_backup` commands (database via SQLite online backup + whole media tree, manifest, verification, retention)
+- [x] `infra/`: deploy, status, backup, fetch-backup, restore-drill, restore, rollback playbooks, Quadlet and backup timer templates, `partsdb_rootless.yml`; no sudo/become; Makefile targets
+- [x] Tests: upload lands in media, backups, health, settings, sudo-free, hardening, mounts, isolation from Tax names, no Caddy code
+- [x] Docs: ADR 0002, `docs/deployment.md`, `docs/podman-explained.md`, README
+- [x] R2: first rootless deploy, persistence proof (redeploy same/changed image, restart), backup / fetch / restore-drill, gateway serves the rootless container
+- [x] R2: owner stopped the rootful unit and renamed its unit file; reboot test with nobody logged in passed (container came back healthy, data intact, gateway 200)
+- [ ] R3: loopback-only already default; close port 8888, `DJANGO_HTTPS=1`, drop the CSRF origin for `:8888`, remove the rootful and Docker playbooks and Makefile targets
 
 ## Next increments
 

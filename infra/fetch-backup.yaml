@@ -1,0 +1,47 @@
+---
+# Copies the newest backup (or BACKUP=name) to local/backups/ on this computer and verifies it there.
+# The copy is an off-server safeguard; local/ is git-ignored. Keep it out of any synced/shared folder.
+- name: Fetch a backup
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Find the newest backup
+      ansible.builtin.find:
+        paths: "{{ data_root }}/backups"
+        patterns: "backup-*.tar.gz"
+      register: found
+      when: backup_file is not defined
+
+    - name: Choose the backup
+      ansible.builtin.set_fact:
+        fetch_file: "{{ backup_file | default((found.files | sort(attribute='mtime') | last).path | basename) }}"
+
+    - name: Copy it here
+      ansible.builtin.fetch:
+        src: "{{ data_root }}/backups/{{ fetch_file }}"
+        dest: "{{ playbook_dir }}/../local/backups/{{ fetch_file }}"
+        flat: true
+
+    - name: Restrict permissions of the local copy
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../local/backups/{{ fetch_file }}"
+        mode: "0600"
+
+    - name: Verify the local copy (checksums, database integrity, row counts)
+      delegate_to: localhost
+      ansible.builtin.command:
+        cmd: ".venv/bin/python manage.py restore_backup {{ fetch_file | quote }} --backup-dir local/backups"
+        chdir: "{{ playbook_dir }}/.."
+      register: local_verify
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ ['local/backups/' ~ fetch_file] + local_verify.stdout_lines }}"

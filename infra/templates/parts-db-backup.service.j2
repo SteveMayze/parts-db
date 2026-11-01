@@ -1,0 +1,7 @@
+# Managed by Ansible (infra/deploy.yaml). A systemd USER service, run by the service user's own systemd.
+[Unit]
+Description=Parts DB: database and PDF backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman run {{ podman_run_flags }} {{ image_repo }}:current python manage.py backup_db --prune

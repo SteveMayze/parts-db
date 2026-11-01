@@ -1,0 +1,76 @@
+---
+# Restores a backup into the live data folders. It replaces the live state, therefore it needs explicit confirmation
+# (prompt, or  -e confirm=RESTORE ):   make restore BACKUP=backup-YYYYMMDD-HHMMSS.tar.gz
+# Steps: verify the archive, stop the app, take a safety backup of the current state, restore (current data is moved
+# aside as *.before-restore-<time>, never deleted), start, check health.
+- name: Restore parts-db from a backup
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  vars_prompt:
+    - name: confirm
+      prompt: "This replaces the live database and PDFs with the backup. Type RESTORE to continue"
+      private: false
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Require explicit confirmation and a backup name
+      ansible.builtin.assert:
+        that:
+          - confirm == 'RESTORE'
+          - backup_file is defined
+          - backup_file is match('^backup-[0-9]{8}-[0-9]{6}(-[a-z0-9-]+)?\\.tar\\.gz$')
+        fail_msg: "Confirmation missing, or backup_file is not a backup-YYYYMMDD-HHMMSS[-label].tar.gz name."
+
+    - name: Verify the archive first (checksums, database integrity, row counts); changes nothing
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py restore_backup {{ backup_file | quote }}
+      register: verified
+      changed_when: false
+
+    - name: Stop the app
+      ansible.builtin.systemd:
+        scope: user
+        name: "{{ container_name }}.service"
+        state: stopped
+
+    - name: Safety backup of the current state
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py backup_db --label pre-restore
+      register: safety
+      failed_when: false
+      changed_when: "'BACKUP_CREATED' in safety.stdout"
+
+    - name: Restore (existing data is moved aside, never deleted)
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py restore_backup {{ backup_file | quote }}
+        --target-db /data/db.sqlite3 --target-media /media --force
+      register: restored
+      changed_when: true
+
+    - name: Start the app
+      ansible.builtin.systemd:
+        scope: user
+        name: "{{ container_name }}.service"
+        state: started
+
+    - name: Wait until healthy
+      ansible.builtin.command: "podman inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} {{ container_name }}"
+      register: health
+      until: health.stdout == 'healthy'
+      retries: 30
+      delay: 4
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "{{ verified.stdout_lines }}"
+          - "{{ restored.stdout_lines }}"
+          - "Safety backup: {{ safety.stdout | default('none') }}"
