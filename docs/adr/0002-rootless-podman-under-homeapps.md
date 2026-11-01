@@ -34,3 +34,9 @@ Only stopping (and later removing) the rootful unit, because it is a root-owned 
 - The old data is gone. Reloading is done by the owner through the CSV and PDF imports; steps in `docs/deployment.md`.
 - The 38 purchase document rows of the old instance whose PDFs were lost are not repaired or carried over.
 - The unit generator dry-run, ansible syntax check and the tests prove the files are well-formed; a real start, the gateway reaching the container by name and reboot survival can only be proven on the server (phase R2).
+
+## Phase R2 notes (2026-11-01)
+- The rootless instance was deployed beside the old one on loopback port 8891; the owner created a login, imported four invoices through a tunnel, and the persistence proof passed (redeploy with the same and with a changed image, and a service restart, all kept the PDFs and rows). Backup, fetch-backup and restore-drill succeeded.
+- A bug found through the tunnel: opening `/parts-db/admin/` directly produced `next=/parts-db/parts-db/admin/` because the prefix-stripping middleware left `request.path` unchanged. Fixed in the middleware with a regression test. Behind the gateway nothing was affected.
+- The owner ran the gateway session; `https://cornil.fritz.box/parts-db/` is now served by the rootless container by name (`parts-db-web:8000`).
+- Still the owner's decisions: when to stop the rootful unit (runbook in `docs/deployment.md`), and later whether to remove it. Not yet verified: survival of a server reboot with nobody logged in.

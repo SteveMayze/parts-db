@@ -54,11 +54,54 @@ The new instance is empty. From the running old app (do not touch the old instan
 4. `make backup-now`, then `make fetch-backup`.
 The 38 documents whose PDF originals were lost in the old container cannot be recovered; re-import them from your own files if you still have them.
 
-## Persistence proof (planned for phase R2)
-Import a test PDF, then redeploy (same image, then a changed image) and `systemctl --user restart parts-db-web.service`; show that the file (name and size) and the database row are still there. A unit test already proves that the real upload view stores the PDF in the configured media folder.
+## Persistence proof (done in phase R2)
+With 4 imported invoices (4 PDFs, 4 database rows) the container was recreated by a redeploy of the same image, by a redeploy of a changed image, and by `systemctl --user restart parts-db-web.service`. After each, the 4 PDF files (same names and sizes) and the 4 rows were still there. A unit test also proves that the real upload view stores the PDF in the configured media folder.
 
-## Switching the gateway (outline; the exact runbook is written in phase R2)
-Order: rootless instance first (on `gateway`), gateway upstream second (`partsdb_upstream: parts-db-web:8000`, done in the gateway repository), rootful stopped third, the plain port closes last (phase R3). Stopping the rootful unit needs sudo and is run by the owner, who also decides about removing it.
+## Switching the gateway, and stopping the old instance (runbook)
+Order, and why: (1) rootless instance running on `gateway` (done), (2) gateway upstream switched to it, (3) you test, (4) only when you say so, the old rootful unit is stopped, (5) much later, the plain port 8888 is closed (phase R3). Stopping the old instance before step 2 would take the site down, because the gateway still points at it until then.
+
+### 1. Before the switch
+- Export your old parts as CSV from the old app (link **Alle Bauteile exportieren**) if you still want them. Nothing else is read or copied from the old instance.
+- `make status` shows `healthy` and `[http=200]`; `make backup-now` has been run.
+
+### 2. Switch the gateway (separate session, in the `cornil-gateway` repository)
+It sets `partsdb_upstream: parts-db-web:8000` (the container name and the port **inside** the container, not 8891) and runs `make smoke`. Nothing in this repository changes for this step.
+
+### 3. Test through the gateway
+Open `https://cornil.fritz.box/parts-db/parts/` in a browser: log in, add a part, import a CSV, import an invoice PDF, open the admin (`/parts-db/admin/`). To confirm which instance answers, ask the new container's log: `ssh homeapps@<server> podman logs --since 5m parts-db-web` shows your requests; the old one would show nothing there.
+
+### Rollback before step 4
+Set `partsdb_upstream` back to the old value in the gateway repository and redeploy the gateway. The old instance is still running and untouched, so nothing else is needed. Anything entered in the new instance in the meantime stays there (and in its backups).
+
+### 4. Stop the old rootful unit (you run these; they need your sudo password)
+Do this only after step 3 passed and you have said so. It stops the old container and keeps it from starting again at boot. **It does not delete the old data folder, image or the unit file's contents.** Note that stopping recreates nothing, but any files that exist only inside the old container (never mounted) are lost when that container is removed later; they are not needed, see ADR 0002.
+```
+sudo systemctl stop parts-db.service    # stops the old rootful container; frees port 8888
+sudo mv /etc/containers/systemd/parts-db.container /etc/containers/systemd/parts-db.container.rootful-disabled   # so it cannot start again after a reboot
+sudo systemctl daemon-reload            # tells the server's systemd about the change
+```
+Expected: no output. Check from your computer: `curl -m 5 http://cornil.fritz.box:8888/` is refused, and `https://cornil.fritz.box/parts-db/parts/` still works.
+
+### Going back to the old instance (only if step 4 was done and something is wrong)
+```
+sudo mv /etc/containers/systemd/parts-db.container.rootful-disabled /etc/containers/systemd/parts-db.container
+sudo systemctl daemon-reload
+sudo systemctl start parts-db.service   # starts the old container again on 8888
+```
+then point `partsdb_upstream` back at the old value in the gateway repository. The old database file was not touched.
+
+### Later, your decision (documented, not run by anything): removing the old setup
+Only when you are sure you will not go back. These delete permanently:
+```
+sudo rm /etc/containers/systemd/parts-db.container.rootful-disabled   # the old unit file
+sudo podman rmi localhost/parts-db:latest                              # the old rootful image (the rootless images belong to homeapps and are separate)
+sudo rm -r /etc/parts-db                                               # the old secret file
+sudo rm -r <old data folder of the rootful setup>                      # the old database and static files: PERMANENT
+sudo systemctl daemon-reload
+```
+
+### 5. After the switch
+Reload anything you still want through the imports (see "Reloading data after an empty start"), run `make backup-now` and `make fetch-backup`. Closing port 8888 and turning on Secure cookies is phase R3 (after a few days of normal use).
 
 ## Troubleshooting
 See the table in `docs/podman-explained.md`, section 7.
