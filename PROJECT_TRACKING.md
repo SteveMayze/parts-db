@@ -43,7 +43,7 @@ Decision: no data migration. The PDF folder was never mounted in the rootful con
 - [x] Tests: upload lands in media, backups, health, settings, sudo-free, hardening, mounts, isolation from Tax names, no Caddy code
 - [x] Docs: ADR 0002, `docs/deployment.md`, `docs/podman-explained.md`, README
 - [x] R2: first rootless deploy, persistence proof (redeploy same/changed image, restart), backup / fetch / restore-drill, gateway serves the rootless container
-- [ ] R2 open: owner reboot test; owner stops the rootful unit (runbook in `docs/deployment.md`)
+- [x] R2: owner stopped the rootful unit and renamed its unit file; reboot test with nobody logged in passed (container came back healthy, data intact, gateway 200)
 - [ ] R3: loopback-only already default; close port 8888, `DJANGO_HTTPS=1`, drop the CSRF origin for `:8888`, remove the rootful and Docker playbooks and Makefile targets
 
 ## Next increments
