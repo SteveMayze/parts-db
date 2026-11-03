@@ -14,8 +14,6 @@ samples/
 inventory.ini
 media/
 
-CLAUDE.md
-docs/prompts/
 .claude
 db.sqlite3.bak-*
 

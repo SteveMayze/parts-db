@@ -1,0 +1,26 @@
+# Request for the parts-db repo: Part B, run under /parts-db behind the cornil gateway
+
+Paste this into a new session in the parts-db repo (https://github.com/SteveMayze/parts-db). If the repo has a `CLAUDE.md`, read it first; its rules apply. If it has none, apply these: never print or commit secrets, work one phase at a time with a hard stop and an end-of-phase report, explain every concept in plain language.
+
+## Context
+A new repository, `cornil-gateway`, now owns the Caddy reverse proxy on the home server and is live on 80 and 443. It forwards `https://cornil.fritz.box/parts-db/...` to parts-db at `host.containers.internal:8888`, **stripping the `/parts-db` prefix** from the path and keeping `Host: cornil.fritz.box`, adding `X-Forwarded-Proto: https`. Today it works but the app is unaware of the prefix: its own redirects (for example `/` to `/parts/`) lose `/parts-db`. On 2026-10-07 this repo's Caddy playbook overwrote the shared Caddyfile; that must never happen again, so **this repo must contain no Caddy code at all**.
+
+The owner knows little about Podman and Linux administration: explain concepts and commands in plain language.
+
+## What to do (one phase, then stop and report)
+1. **Inspect first, change nothing**, and report: current settings (`ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, static files and who serves them, login and logout redirects, session and CSRF cookie names), the URL layout (the app currently lives under `/parts/` and `/admin/`), the deployment playbook and how its Caddy tasks overwrote the shared file. Note that the current server unit is rootful, publishes `8888:8000` on all interfaces and passes `DJANGO_ALLOWED_HOST` (singular), `DJANGO_DEBUG_FALSE` and a `DJANGO_SECRET_KEY` as plain `Environment=` lines in a world-readable unit file. Report that last point as a finding (do not print the value anywhere) and propose moving the secret into a root-only environment file with a new key; ask me before rotating, since rotating logs everyone out.
+2. **Prefix support**, configurable by environment variable, default empty so nothing changes without it: `FORCE_SCRIPT_NAME` (for example `/parts-db`), `LOGIN_URL`, `LOGIN_REDIRECT_URL`, `LOGOUT_REDIRECT_URL`, `STATIC_URL` and any hard-coded absolute URLs in templates or JavaScript; `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` when behind the TLS proxy; configurable `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS` (`https://cornil.fritz.box`; keep the plain `http://cornil.fritz.box:8888` origin while the old port is open). Because the gateway strips the prefix, Django receives paths without it, which is what `FORCE_SCRIPT_NAME` expects.
+3. **Own cookie names**, for example `partsdb_sessionid` and `partsdb_csrftoken`, with cookie path set to the prefix, so parts-db and the tax app do not log each other out.
+4. **Remove the Caddy playbook and every Caddy task and file** from this repo; document in the README that the proxy is owned by `cornil-gateway`. The old files stay available in git history only.
+5. **Deployment variable** `listen_address` for the published port, **defaulting to today's behaviour (all interfaces)**. Do NOT narrow it to `127.0.0.1`: tested on the server, the gateway's route (`host.containers.internal`) cannot reach a port bound only to loopback. Narrowing waits until parts-db is rootless and joins the gateway network (later, separate step).
+6. **Tests** with the real Django test client with the prefix set: login, logout, redirects and form actions carry the prefix; static files resolve under the prefix; the admin works under the prefix; cookies have the new names and path. All existing tests must still pass with the prefix empty.
+7. Deploy (the owner runs any sudo command; give the exact command and what it changes). Then verify and show me: `https://cornil.fritz.box/parts-db/` loads through the gateway, login works, a form post works, `http://cornil.fritz.box:8888` still works, and from the gateway repo `make smoke` no longer prints the "does not yet add the prefix" note (run it, or ask me to).
+8. **Do not touch** the gateway repo or the tax repo, and do not move parts-db to rootless in this phase.
+
+## Optional later phase (only after the gateway works and I say go)
+Move parts-db from rootful to rootless under the same service user `homeapps`, following the pattern of the tax app (explain in plain language, migrate beside the old instance, compare data, cut over, leave the old data until I approve removal). It then joins the `gateway` network by container name and `listen_address` can be closed. Its own report, not combined with the prefix work.
+
+## Rules
+No secrets, real addresses or usernames in tracked files or in the report. Update `CLAUDE.md` (create it if missing) and add an ADR after each decision. End with the end-of-phase report (done, commits, checks, deviations, open questions, what was not verified), each acceptance criterion marked met / not met / not verifiable here, then wait for my "go".
+
+Acceptance: all existing tests pass with the prefix empty and the prefix tests pass; `https://cornil.fritz.box/parts-db/` works through the gateway and `:8888` still works until G3; the repo contains no Caddy configuration and no secret in a tracked file.
