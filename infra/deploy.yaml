@@ -3,6 +3,8 @@
 # ROOTLESS Podman + Quadlet, run as the ordinary service user: no sudo, no -K. Own image, container name, data folders
 # and loopback port; the secret in a file only the service user can read; non-root user inside the container,
 # read-only root file system, dropped capabilities. Data folders are only ever created, never removed or emptied.
+# The data lives on the removable disk /u01 (ADR 0003): the checks below refuse, before anything is changed, when the disk
+# is not mounted, the folders are missing, or the server has not been relocated yet (make relocate-storage).
 # Run with:  make deploy
 - name: Deploy parts-db
   hosts: partsdb_rootless
@@ -16,7 +18,7 @@
     dirty_tree: "{{ lookup('pipe', 'git -C ' ~ repo_root ~ ' status --porcelain --untracked-files=no') }}"
     allow_dirty: false
     image_new: "{{ image_repo }}:{{ app_commit }}"
-    build_dir: "{{ data_root }}/build/{{ app_commit }}"
+    build_dir: "{{ build_base }}/{{ app_commit }}"
     archive_dir: "{{ repo_root }}/local/build"
     archive_local: "{{ archive_dir }}/{{ app_name }}-{{ app_commit }}.tar.gz"
     quadlet_file: "{{ quadlet_dir }}/{{ container_name }}.container"
@@ -29,14 +31,16 @@
       delegate_to: localhost
       run_once: true
 
-    - name: Refuse any data_root other than this app's own folder (the Tax app lives next to it in the same home folder)
+    - name: Refuse any folder that is not this app's own (the Tax app lives next to it)
       ansible.builtin.assert:
         that:
           - app_name == 'parts-db'
-          - data_root == service_home ~ '/parts-db'
+          - config_root == service_home ~ '/parts-db'
+          - storage_root == '/u01/data/parts-db'
+          - build_root == '/u01/apps/parts-db/build'
           - container_name == 'parts-db-web'
           - image_repo == 'localhost/parts-db'
-        fail_msg: "data_root must be {{ service_home }}/parts-db for the app parts-db; nothing was changed."
+        fail_msg: "config_root, storage_root and build_root must be this app's own folders (parts-db); nothing was changed."
 
     - name: Check connectivity
       ansible.builtin.ping:
@@ -56,6 +60,57 @@
           {{ quadlet_dir }}/{{ gateway_network }} does not exist. The app joins the network that the separate gateway
           repository creates; deploy the gateway first (nothing was changed here). See docs/deployment.md.
 
+    - name: Which storage layout does the server use now? (a one-word marker written by relocate-storage; none = legacy)
+      ansible.builtin.command: "cat {{ storage_marker }}"
+      register: marker
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: The configured layout must match the server (nothing was changed)
+      ansible.builtin.assert:
+        that: (marker.stdout | default('') | trim or 'legacy') == ('u01' if use_u01 | bool else 'legacy')
+        fail_msg: >-
+          The server uses the '{{ marker.stdout | default('') | trim or 'legacy' }}' layout but use_u01 is {{ use_u01 }}.
+          Not relocated yet: run  make relocate-storage  (or deploy the old layout with  -e use_u01=false).
+          Already relocated and use_u01 is false: that is a rollback, set it deliberately. Nothing was changed.
+
+    - name: Is the removable disk really mounted at {{ mount_guard_path }}? (the empty mount point alone is not enough)
+      ansible.builtin.command: "/usr/bin/mountpoint -q {{ mount_guard_path }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: u01_mount
+      when: use_u01 | bool
+
+    - name: The disk must be mounted (nothing was changed)
+      ansible.builtin.assert:
+        that: u01_mount.rc == 0
+        fail_msg: "{{ mount_guard_path }} is not a mount point, so the disk is not attached. Nothing was changed."
+      when: use_u01 | bool
+
+    - name: Look at the storage folders
+      ansible.builtin.stat:
+        path: "{{ storage_root }}/{{ item }}"
+        get_checksum: false
+      loop: [data, media, backups]
+      register: storage_dirs
+      when: use_u01 | bool
+
+    - name: The storage folders must exist and belong to the service user (they are created by relocate-storage, never here)
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == service_user
+        fail_msg: >-
+          {{ storage_root }}/{{ item.item }} is missing or not owned by {{ service_user }}. Run make relocate-storage
+          first. Nothing was changed.
+      loop: "{{ storage_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: use_u01 | bool
+
     - name: Check that Podman is installed (nothing is installed or upgraded by this playbook)
       ansible.builtin.command: podman --version
       changed_when: false
@@ -68,9 +123,10 @@
         state: directory
         mode: "0700"
       loop:
-        - "{{ data_root }}"
+        - "{{ config_root }}"
         - "{{ etc_dir }}"
-        - "{{ data_root }}/build"
+        - "{{ build_base }}"
+        - "{{ build_base }}/tmp"
         - "{{ data_root }}/data"
         - "{{ data_root }}/media"
         - "{{ data_root }}/backups"
@@ -148,6 +204,8 @@
           podman build --build-arg GIT_COMMIT={{ app_commit }}
           -t {{ image_new }} -f Dockerfile .
         chdir: "{{ build_dir }}/src"
+      environment:
+        TMPDIR: "{{ build_base }}/tmp"        # build scratch space on the big disk, not the eMMC
       changed_when: true
 
     - name: Remember the image that is live now
@@ -249,7 +307,7 @@
 
     - name: Record this deployment
       ansible.builtin.copy:
-        dest: "{{ data_root }}/DEPLOYED"
+        dest: "{{ config_root }}/DEPLOYED"
         mode: "0644"
         content: |
           commit={{ app_commit }}

@@ -5,14 +5,15 @@ PYTHON := .venv/bin/python
 PIP := $(PYTHON) -m pip
 ANSIBLE_PLAYBOOK := ANSIBLE_CONFIG=infra/ansible.cfg .venv/bin/ansible-playbook
 ANSIBLE_GALAXY := .venv/bin/ansible-galaxy
-ANSIBLE := $(ANSIBLE_PLAYBOOK) -i infra/inventory.ini
+# EXTRA passes more options, e.g.  make status EXTRA="-e use_u01=false"  before the data has been relocated to /u01.
+ANSIBLE := $(ANSIBLE_PLAYBOOK) -i infra/inventory.ini $(EXTRA)
 HOST := $(shell awk '/^\[partsdb_rootless\]/{f=1;next} /^\[/{f=0} f && NF {h=$$1; for (i=2;i<=NF;i++) if ($$i ~ /^ansible_host=/) {h=$$i; sub("ansible_host=","",h)}; print h; exit}' infra/inventory.ini 2>/dev/null)
 USER_AT := $(shell awk '/^\[partsdb_rootless\]/{f=1;next} /^\[/{f=0} f && NF {for (i=2;i<=NF;i++) if ($$i ~ /^ansible_user=/) {sub("ansible_user=","",$$i); print $$i "@"}; exit}' infra/inventory.ini 2>/dev/null)
 BACKUP_ARG := $(if $(BACKUP),-e backup_file=$(BACKUP),)
 CONFIRM_ARG := $(if $(CONFIRM),-e confirm=$(CONFIRM),)
 MANAGE := bin/parts-db-manage
 
-.PHONY: setup test check ansible-setup syntax deploy status backup-now fetch-backup restore-drill restore rollback \
+.PHONY: setup test check ansible-setup syntax deploy status backup-now fetch-backup restore-drill restore rollback relocate-storage rollback-storage \
         createsuperuser changepassword deploy-docker deploy-podman
 
 setup:
@@ -30,7 +31,7 @@ ansible-setup:
 	$(ANSIBLE_GALAXY) collection install -r infra/requirements.yml
 
 syntax:
-	@for p in deploy.yaml status.yaml backup.yaml fetch-backup.yaml restore-drill.yaml restore.yaml rollback.yaml; do \
+	@for p in deploy.yaml status.yaml backup.yaml fetch-backup.yaml restore-drill.yaml restore.yaml rollback.yaml relocate-storage.yaml rollback-storage.yaml; do \
 	  $(ANSIBLE) --syntax-check infra/$$p >/dev/null && echo "ok  $$p" || exit 1; done
 
 deploy:                ## build and deploy the committed revision as the service user
@@ -54,6 +55,12 @@ restore:               ## restore live data from BACKUP=backup-....tar.gz (asks 
 
 rollback:              ## previous image (add BACKUP=pre-deploy backup to restore the data too)
 	$(ANSIBLE) infra/rollback.yaml $(BACKUP_ARG)
+
+relocate-storage:      ## copy data, PDFs and backups to /u01, compare every file, switch only after you type SWITCH (never deletes)
+	$(ANSIBLE) infra/relocate-storage.yaml
+
+rollback-storage:      ## point the app back at the old folders in the home folder (asks you to type ROLLBACK)
+	$(ANSIBLE) infra/rollback-storage.yaml
 
 createsuperuser:       ## create your login on the server (interactive)
 	ssh -t $(USER_AT)$(HOST) $(MANAGE) createsuperuser

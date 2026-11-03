@@ -15,8 +15,18 @@ public_scheme: "{{ 'https' if use_https else 'http' }}"
 # --- The service user and where everything lives (all inside its home folder) ---
 service_user: homeapps               # logs in by SSH key only; created once by the Tax repo's bootstrap
 service_home: "/home/{{ service_user }}"
-data_root: "{{ service_home }}/{{ app_name }}"          # data/ media/ backups/ build/ config/ (never the Tax app's folder)
-etc_dir: "{{ data_root }}/config"                       # holds the secret file `env` (mode 0600, owned by the service user)
+# Where things live. The secret env file and the deploy record stay on the eMMC (config_root); the data, the PDFs, the
+# backups and the image build files live on the removable disk /u01 (storage_root, build_root). See ADR 0003.
+config_root: "{{ service_home }}/{{ app_name }}"        # config/ (the secret file `env`) and DEPLOYED; never moved to /u01
+etc_dir: "{{ config_root }}/config"                     # holds the secret file `env` (mode 0600, owned by the service user)
+legacy_root: "{{ config_root }}"                        # the OLD home of data/ media/ backups/ build/ (kept for rollback)
+storage_root: /u01/data/parts-db                        # data/ media/ backups/ (contract v1; the Tax tool has its own sibling folder)
+build_root: /u01/apps/parts-db/build                    # image build contexts (were ~/parts-db/build)
+mount_guard_path: /u01                                  # must be a real mount point before anything starts or deploys
+use_u01: true                                           # false = the old layout under legacy_root (used for rollback, see docs/deployment.md)
+data_root: "{{ storage_root if use_u01 | bool else legacy_root }}"                       # where data/ media/ backups/ are RIGHT NOW
+build_base: "{{ build_root if use_u01 | bool else legacy_root ~ '/build' }}"
+storage_marker: "{{ etc_dir }}/storage_location"        # one word on the server, `u01` or `legacy`: written by relocate/rollback-storage
 quadlet_dir: "{{ service_home }}/.config/containers/systemd"   # Quadlet container files for the user's systemd
 unit_dir: "{{ service_home }}/.config/systemd/user"            # ordinary user units (the backup service and timer)
 bin_dir: "{{ service_home }}/bin"

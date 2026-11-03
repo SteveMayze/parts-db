@@ -12,7 +12,8 @@ from django.test import SimpleTestCase
 
 ROOT = Path(settings.BASE_DIR)
 INFRA = ROOT / "infra"
-ROOTLESS_PLAYBOOKS = ["deploy", "status", "backup", "fetch-backup", "restore-drill", "restore", "rollback"]
+ROOTLESS_PLAYBOOKS = ["deploy", "status", "backup", "fetch-backup", "restore-drill", "restore", "rollback",
+                      "relocate-storage", "rollback-storage"]
 LEGACY = {"deploy-playbook.yaml", "deploy-playbook-podman-quadlet.yaml"}      # rootful; removed in phase R3
 TAX_WORDS = ("tax", "healthcare", "kk-tool", "kktool")
 
@@ -38,7 +39,7 @@ TEMPLATES = ("parts-db-web.container.j2", "parts-db-backup.service.j2", "parts-d
 
 
 @functools.lru_cache(maxsize=None)
-def _render_all():
+def _render_all(use_u01=True):
     """Render every template once with Ansible's own engine, the real group_vars and a fake host."""
     out = Path(tempfile.mkdtemp())
     tasks = "".join(
@@ -51,13 +52,13 @@ def _render_all():
         f"  tasks:\n{tasks}"
     )
     ansible = ROOT / ".venv" / "bin" / "ansible-playbook"
-    cmd = [str(ansible) if ansible.exists() else "ansible-playbook", "-i", "localhost,", "-c", "local", str(play)]
+    cmd = [str(ansible) if ansible.exists() else "ansible-playbook", "-i", "localhost,", "-c", "local", "-e", f"use_u01={str(use_u01).lower()}", str(play)]
     subprocess.run(cmd, check=True, capture_output=True)
     return {t: (out / t).read_text() for t in TEMPLATES}
 
 
-def rendered(template):
-    return _render_all()[template]
+def rendered(template, use_u01=True):
+    return _render_all(use_u01)[template]
 
 
 class DockerfileTests(SimpleTestCase):
@@ -117,7 +118,7 @@ class QuadletTests(SimpleTestCase):
         self.assertEqual(re.findall(r"^PublishPort=(.+)$", self.template, re.M), ["{{ listen_address }}:{{ app_port }}:8000"])
 
     def test_hardening(self):
-        for line in ("ReadOnly=true", "NoNewPrivileges=true", "DropCapability=ALL", "Tmpfs=/tmp", "Restart=always", "HealthOnFailure=restart"):
+        for line in ("ReadOnly=true", "NoNewPrivileges=true", "DropCapability=ALL", "Tmpfs=/tmp", "Restart=on-failure", "HealthOnFailure=restart"):
             self.assertIn(line, self.unit)
         self.assertIn("--memory=", self.unit)
         self.assertIn("--pids-limit=", self.unit)
@@ -128,12 +129,12 @@ class QuadletTests(SimpleTestCase):
         for ch in ('"', "'", ";", "`", "$"):
             self.assertNotIn(ch, cmds[0])
 
-    def test_exactly_the_three_parts_db_folders_are_mounted(self):
+    def test_exactly_the_three_parts_db_folders_are_mounted_from_the_removable_disk(self):
         mounts = re.findall(r"^Volume=(.+)$", self.unit, re.M)
         self.assertEqual(mounts, [
-            "/home/homeapps/parts-db/data:/data",
-            "/home/homeapps/parts-db/media:/media",
-            "/home/homeapps/parts-db/backups:/backups",
+            "/u01/data/parts-db/data:/data",
+            "/u01/data/parts-db/media:/media",
+            "/u01/data/parts-db/backups:/backups",
         ])
         env = "".join(re.findall(r"^Environment=(.+)$", self.unit, re.M))
         self.assertIn("DJANGO_DB_PATH=/data/db.sqlite3", env)
@@ -147,10 +148,90 @@ class QuadletTests(SimpleTestCase):
         for name in ("DJANGO_URL_PREFIX", "DJANGO_HTTPS", "DJANGO_HSTS_SECONDS", "DJANGO_DB_PATH", "DJANGO_MEDIA_ROOT", "DJANGO_BACKUP_DIR"):
             self.assertIn(f"-e {name}=", flags)        # one-off runs (migrate, backup, restore) see the same environment
 
+    def test_legacy_layout_still_renders_the_old_paths_without_the_guard(self):
+        old = rendered("parts-db-web.container.j2", use_u01=False)
+        self.assertEqual(re.findall(r"^Volume=(.+)$", old, re.M), [
+            "/home/homeapps/parts-db/data:/data", "/home/homeapps/parts-db/media:/media",
+            "/home/homeapps/parts-db/backups:/backups"])
+        self.assertNotIn("mountpoint", old)
+        self.assertIn("Restart=always", old)
+
     def test_deploy_checks_that_the_gateway_network_exists(self):
         text = read("infra/deploy.yaml")
         self.assertIn("{{ quadlet_dir }}/{{ gateway_network }}", text)
         self.assertIn("gateway_network_file.stat.exists", text)
+
+
+class U01GuardTests(SimpleTestCase):
+    GUARD = ("ExecStartPre=/usr/bin/mountpoint -q /u01", "Restart=on-failure", "RestartSec=10", "StartLimitIntervalSec=0")
+
+    def service_section(self, text):
+        return text.split("[Service]")[1].split("[Install]")[0]
+
+    def test_guard_is_in_the_service_section_of_both_units(self):
+        for name in ("parts-db-web.container.j2", "parts-db-backup.service.j2"):
+            section = self.service_section(rendered(name))
+            for line in self.GUARD:
+                self.assertIn(line, section.splitlines(), f"{name}: {line}")
+
+    def test_requires_mounts_for_is_never_the_guard(self):
+        for name in ("parts-db-web.container.j2", "parts-db-backup.service.j2"):
+            self.assertNotIn("RequiresMountsFor", code_only(rendered(name)))
+
+    def test_the_gateway_proxy_carries_no_guard_here(self):
+        self.assertNotIn("mountpoint", rendered("manage.sh.j2"))
+
+    def test_deploy_checks_the_disk_and_the_folders_before_the_first_change(self):
+        text = read("infra/deploy.yaml")
+        first_change = text.index("Create the config and data directories")
+        for needle in ("mountpoint -q {{ mount_guard_path }}", "item.stat.pw_name == service_user", "storage_marker"):
+            self.assertIn(needle, text)
+            self.assertLess(text.index(needle), first_change, needle)
+        self.assertEqual(group_vars()["mount_guard_path"], "/u01")
+
+
+class RelocateStorageTests(SimpleTestCase):
+    def setUp(self):
+        self.text = read("infra/relocate-storage.yaml")
+        self.code = code_only(self.text)
+
+    def test_nothing_is_deleted_and_nothing_escalates(self):
+        for forbidden in ("state: absent", "--delete", "rsync", "prune", "become", "sudo"):
+            self.assertNotIn(forbidden, self.code)
+        self.assertNotRegex(self.code, r"(?<![-\w])rm\s")
+        self.assertIn("cp -a", self.code)
+
+    def test_all_checks_run_before_the_first_change(self):
+        first_change = self.code.index("state: stopped")
+        for needle in ("mountpoint -q", "Are the new folders empty", "The old folders must exist", "Already relocated"):
+            self.assertLess(self.code.index(needle), first_change, needle)
+
+    def test_backup_before_copy_and_comparison_before_the_switch(self):
+        order = ["--label pre-relocate", "cp -a", "sha256sum", "Type SWITCH", "dest: \"{{ storage_marker }}\"",
+                 "state: restarted"]
+        positions = [self.code.index(o) for o in order]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_switch_needs_a_second_explicit_confirmation(self):
+        self.assertIn("== 'SWITCH'", self.text)
+
+    def test_old_folders_are_reported_as_kept_for_rollback(self):
+        self.assertIn("KEPT FOR ROLLBACK", self.text)
+
+    def test_a_failure_restarts_the_app_on_the_old_folders(self):
+        self.assertIn("rescue:", self.text)
+        self.assertIn("use_u01: false", self.text)
+
+    def test_rollback_storage_asks_for_confirmation_and_backs_up_first(self):
+        text = read("infra/rollback-storage.yaml")
+        self.assertIn("== 'ROLLBACK'", text)
+        self.assertLess(text.index("--label pre-rollback-storage"), text.index("state: stopped"))
+        self.assertNotIn("state: absent", code_only(text))
+
+    def test_makefile_has_both_targets(self):
+        mk = read("Makefile")
+        self.assertIn("relocate-storage:", mk)
+        self.assertIn("rollback-storage:", mk)
 
 
 class SudoFreeTests(SimpleTestCase):
@@ -206,7 +287,8 @@ class DataSafetyTests(SimpleTestCase):
     def test_deploy_backs_up_before_migrating_and_refuses_a_foreign_data_root(self):
         text = read("infra/deploy.yaml")
         self.assertLess(text.index("--label pre-deploy"), text.index("manage.py migrate"))
-        self.assertIn("data_root == service_home ~ '/parts-db'", text)
+        self.assertIn("config_root == service_home ~ '/parts-db'", text)
+        self.assertIn("storage_root == '/u01/data/parts-db'", text)
         self.assertIn("allow_dirty | bool or dirty_tree | length == 0", text)
 
     def test_backup_timer_is_persistent_and_daily(self):
@@ -232,17 +314,26 @@ class IsolationFromTaxAppTests(SimpleTestCase):
             for word in TAX_WORDS:
                 self.assertNotIn(word, code.lower(), f"{name} mentions {word}")
 
-    def test_every_mount_source_and_path_variable_is_under_the_parts_db_root(self):
+    def test_every_mount_source_and_path_variable_is_under_the_parts_db_roots(self):
         gv = group_vars()
         self.assertEqual(gv["app_name"], "parts-db")
         self.assertEqual(gv["container_name"], "parts-db-web")
         self.assertEqual(gv["image_repo"], "localhost/parts-db")
-        self.assertEqual(gv["data_root"], "{{ service_home }}/{{ app_name }}")
-        self.assertEqual(gv["etc_dir"], "{{ data_root }}/config")
+        self.assertEqual(gv["config_root"], "{{ service_home }}/{{ app_name }}")
+        self.assertEqual(gv["etc_dir"], "{{ config_root }}/config")
+        self.assertEqual(gv["storage_root"], "/u01/data/parts-db")
+        self.assertEqual(gv["build_root"], "/u01/apps/parts-db/build")
         for line in re.findall(r"-v (\{\{ \w+ \}\}\S*|\S+)", gv["podman_run_flags"]):
-            self.assertTrue(line.startswith("{{ data_root }}/"), line)
+            self.assertTrue(line.startswith("{{ data_root }}/"), line)     # data_root is storage_root, or legacy_root while rolled back
         for mount in re.findall(r"^Volume=(\S+?):", rendered("parts-db-web.container.j2"), re.M):
-            self.assertTrue(mount.startswith("/home/homeapps/parts-db/"), mount)
+            self.assertTrue(mount.startswith("/u01/data/parts-db/"), mount)
+        allowed = ("/u01/data/parts-db/", "/home/homeapps/parts-db/config/")
+        for blob in (rendered("parts-db-web.container.j2"), rendered("manage.sh.j2")):
+            for path in re.findall(r"(?<![\w.])/(?:u01|home)/[\w./-]*", blob):
+                self.assertTrue(path.startswith(allowed) or path == "/u01", path)      # /u01 alone only in the guard
+                self.assertNotEqual(path.rstrip("/"), "/home/homeapps")
+        for mount in re.findall(r"^Volume=(\S+?):", rendered("parts-db-web.container.j2"), re.M):
+            self.assertNotIn(mount.rstrip("/"), {"/home/homeapps", "/u01"})
 
     def test_playbooks_that_touch_images_only_name_the_parts_db_repository(self):
         for name in ROOTLESS_PLAYBOOKS:
@@ -255,9 +346,10 @@ class IsolationFromTaxAppTests(SimpleTestCase):
             for unit in re.findall(r'name: "([^"]*\.(?:service|timer))"', read(f"infra/{name}.yaml")):
                 self.assertRegex(unit, r"container_name|app_name", f"{name}: {unit}")
 
-    def test_deploy_refuses_when_data_root_is_not_the_parts_db_folder(self):
+    def test_deploy_refuses_when_the_roots_are_not_the_parts_db_folders(self):
         text = read("infra/deploy.yaml")
-        self.assertIn("data_root == service_home ~ '/parts-db'", text)
+        self.assertIn("config_root == service_home ~ '/parts-db'", text)
+        self.assertIn("storage_root == '/u01/data/parts-db'", text)
         self.assertIn("container_name == 'parts-db-web'", text)
 
 

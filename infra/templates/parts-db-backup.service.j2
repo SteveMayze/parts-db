@@ -4,4 +4,11 @@ Description=Parts DB: database and PDF backup
 
 [Service]
 Type=oneshot
+{% if use_u01 | bool %}
+# Same guard as the web service: never write a backup into the empty mount point while the disk is missing.
+ExecStartPre=/usr/bin/mountpoint -q {{ mount_guard_path }}
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=0
+{% endif %}
 ExecStart=/usr/bin/podman run {{ podman_run_flags }} {{ image_repo }}:current python manage.py backup_db --prune
