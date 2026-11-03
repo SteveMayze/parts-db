@@ -53,7 +53,7 @@ No repo writes into another repo's files, units, folders or secrets. The shared 
 /u01/apps/parts-db/build/                 image build contexts (were ~/parts-db/build)
 ```
 
-Stays on the eMMC, never on the removable disk: `config/env` (Django secret key), Podman image storage, Podman secrets.
+Stays on the eMMC, never on the removable disk: each app's `config/env` (Django secret key), the Podman image storage, and the Podman secrets. Image builds use `/u01` for temporary files.
 
 **Database.** Container `postgres` on the Podman network `db`. Not published on the host: reachable only from containers that join `db`, as host `postgres`, port 5432. Official `postgres` image, exact tag and major version fixed by the platform repo (default major 17). `scram-sha-256`. This app: database `partsdb`, role `partsdb` (not a superuser, owns only its database).
 
@@ -61,7 +61,7 @@ Stays on the eMMC, never on the removable disk: `config/env` (Django secret key)
 
 **App settings contract.** If `DJANGO_DB_HOST` is unset the app uses SQLite exactly as today (development and tests unchanged). Otherwise PostgreSQL from `DJANGO_DB_HOST`, `DJANGO_DB_PORT` (default 5432), `DJANGO_DB_NAME`, `DJANGO_DB_USER`, `DJANGO_DB_PASSWORD`. Driver `psycopg` 3, pinned.
 
-**Units.** The app unit gets `Network=db.network` (in addition to `gateway.network`), starts after `postgres.service`, and carries the `/u01` guard decided by the platform repo's phase U0 (starting assumption `RequiresMountsFor=/u01`; U0 proves whether it works in a rootless user unit). **If the owner pasted an amended contract from U0 below this line, it overrides the text above.**
+**Units.** Each app unit gets Network=db.network (in addition to gateway.network) and starts after postgres.service. The /u01 guard, proven on the server, goes in the unit’s [Service] section: ExecStartPre=/usr/bin/mountpoint -q /u01, Restart=on-failure, RestartSec=10, StartLimitIntervalSec=0. RequiresMountsFor=/u01 alone does not work in a user unit, because it only orders the start and never blocks it.
 
 **Not in the contract: text ordering.** PostgreSQL sorts text by locale rules, SQLite by bytes. Anything displayed or exported in an order must have an explicit, tested ordering.
 
