@@ -1,0 +1,232 @@
+---
+# Moves the data of parts-db (database, PDF originals, backups) from the home folder to the removable disk /u01
+# (ADR 0003).  make relocate-storage
+# Nothing is ever deleted: the data is COPIED, the old folders stay where they are ("kept for rollback"). The steps:
+#   1. checks (disk mounted, old data present, new folders empty or absent). Nothing is changed if one fails.
+#   2. stop the app, take a verified backup (label pre-relocate) from the OLD folders
+#   3. copy data, media and backups with cp -a (no option that deletes anything)
+#   4. compare the file lists and the SHA-256 of every file, and SHOW the result
+#   5. only after a second confirmation (type SWITCH, or -e confirm_switch=SWITCH): point the unit at the new folders,
+#      write the marker, start, wait until healthy. Without the confirmation the app is started again on the old folders.
+- name: Relocate parts-db storage to /u01
+  hosts: partsdb_rootless
+  gather_facts: false
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ service_uid | default('') }}"
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ service_uid | default('') }}/bus"
+  vars:
+    use_u01: true                                        # this playbook renders the NEW layout
+    old_flags: "{{ podman_run_flags | replace(storage_root, legacy_root) }}"      # one-off runs against the OLD folders
+    folders: [data, media, backups]
+  tasks:
+    - name: Connected as the service user, with linger on and a running user systemd
+      ansible.builtin.include_tasks: tasks/service-session.yml
+
+    - name: Which storage layout does the server use now?
+      ansible.builtin.command: "cat {{ storage_marker }}"
+      register: marker
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Already relocated? Then there is nothing to do (nothing was changed)
+      ansible.builtin.assert:
+        that: (marker.stdout | trim or 'legacy') == 'legacy'
+        fail_msg: "The marker says the data is already on {{ storage_root }}. Nothing was changed."
+
+    - name: Is the removable disk really mounted at {{ mount_guard_path }}?
+      ansible.builtin.command: "/usr/bin/mountpoint -q {{ mount_guard_path }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: u01_mount
+
+    - name: The disk must be mounted (nothing was changed)
+      ansible.builtin.assert:
+        that: u01_mount.rc == 0
+        fail_msg: "{{ mount_guard_path }} is not a mount point. Attach and mount the disk first. Nothing was changed."
+
+    - name: Look at the old folders
+      ansible.builtin.stat:
+        path: "{{ legacy_root }}/{{ item }}"
+        get_checksum: false
+      loop: "{{ folders }}"
+      register: old_dirs
+
+    - name: The old folders must exist (nothing was changed)
+      ansible.builtin.assert:
+        that: item.stat.exists and item.stat.isdir
+        fail_msg: "{{ legacy_root }}/{{ item.item }} does not exist; there is nothing to relocate. Nothing was changed."
+      loop: "{{ old_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Are the new folders empty? (a copy never overwrites data that is already there)
+      ansible.builtin.shell:
+        cmd: "if [ -d {{ storage_root }}/{{ item }} ]; then ls -A {{ storage_root }}/{{ item }} | wc -l; else echo 0; fi"
+        executable: /bin/bash
+      loop: "{{ folders }}"
+      register: new_counts
+      changed_when: false
+      check_mode: false
+
+    - name: The new folders must be empty or absent (nothing was changed)
+      ansible.builtin.assert:
+        that: item.stdout | trim == '0'
+        fail_msg: >-
+          {{ storage_root }}/{{ item.item }} already holds files. Move them aside by hand and run again; this playbook
+          never overwrites. Nothing was changed.
+      loop: "{{ new_counts.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Is the app image there? (needed for the verified backup)
+      ansible.builtin.command: "podman image exists {{ image_repo }}:current"
+      changed_when: false
+      check_mode: false
+
+    - name: Copy, verify and switch
+      block:
+        - name: Stop the app so the files do not change while they are copied
+          ansible.builtin.systemd:
+            scope: user
+            name: "{{ container_name }}.service"
+            state: stopped
+
+        - name: Verified backup of the OLD folders first (database and PDFs together)
+          ansible.builtin.command: >-
+            podman run {{ old_flags }} {{ image_repo }}:current
+            python manage.py backup_db --label pre-relocate
+          register: pre_backup
+          changed_when: "'BACKUP_CREATED' in pre_backup.stdout"
+
+        - name: Create the new folders (private to the service user; existing ones are left as they are)
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0700"
+          loop:
+            - "{{ storage_root }}"
+            - "{{ storage_root }}/data"
+            - "{{ storage_root }}/media"
+            - "{{ storage_root }}/backups"
+            - "{{ build_root }}"
+
+        - name: Copy the contents (cp -a keeps modes and times; it has no option that deletes; the old folders stay untouched)
+          ansible.builtin.command: "cp -a {{ legacy_root }}/{{ item }}/. {{ storage_root }}/{{ item }}/"
+          loop: "{{ folders }}"
+          changed_when: true
+
+        - name: Compare file lists and the SHA-256 of every file, old against new
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              list() { (cd "$1" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum); }
+              dirs() { (cd "$1" && find . -type d | sort); }
+              if diff <(list {{ legacy_root }}/{{ item }}) <(list {{ storage_root }}/{{ item }}) >/dev/null \
+                 && diff <(dirs {{ legacy_root }}/{{ item }}) <(dirs {{ storage_root }}/{{ item }}) >/dev/null; then
+                echo "{{ item }}: IDENTICAL files=$(list {{ storage_root }}/{{ item }} | wc -l) bytes=$(du -sb {{ storage_root }}/{{ item }} | cut -f1)"
+              else
+                echo "{{ item }}: DIFFERENT"; exit 1
+              fi
+            executable: /bin/bash
+          loop: "{{ folders }}"
+          register: compared
+          changed_when: false
+          check_mode: false
+
+        - name: The comparison (file counts and sizes only, never contents)
+          ansible.builtin.debug:
+            msg: "{{ compared.results | map(attribute='stdout') | list }}"
+
+        - name: Second confirmation, asked only after the comparison above (type SWITCH to continue)
+          ansible.builtin.pause:
+            prompt: "Everything was copied and is identical. Type SWITCH to point the app at {{ storage_root }}"
+          register: answer
+          when: confirm_switch is not defined
+
+        - name: Require the confirmation
+          ansible.builtin.assert:
+            that: (confirm_switch | default(answer.user_input | default(''))) == 'SWITCH'
+            fail_msg: "Not confirmed. The app is started again on the old folders; nothing was switched."
+
+        - name: Remember that the data is on the new disk now (deploy and the other playbooks check this marker)
+          ansible.builtin.copy:
+            dest: "{{ storage_marker }}"
+            content: "u01\n"
+            mode: "0600"
+
+        - name: Install the unit pointing at the new folders (and the guard)
+          ansible.builtin.template:
+            src: parts-db-web.container.j2
+            dest: "{{ quadlet_dir }}/{{ container_name }}.container"
+            mode: "0644"
+
+        - name: Install the backup service and the management wrapper for the new folders
+          ansible.builtin.template:
+            src: "{{ item.src }}"
+            dest: "{{ item.dest }}"
+            mode: "{{ item.mode }}"
+          loop:
+            - {src: parts-db-backup.service.j2, dest: "{{ unit_dir }}/parts-db-backup.service", mode: "0644"}
+            - {src: manage.sh.j2, dest: "{{ bin_dir }}/{{ app_name }}-manage", mode: "0750"}
+      rescue:
+        - name: Something stopped the relocation. Put the marker back to legacy if it was written
+          ansible.builtin.copy:
+            dest: "{{ storage_marker }}"
+            content: "legacy\n"
+            mode: "0600"
+          when: not ansible_check_mode
+
+        - name: Reinstall the unit for the OLD folders so the app is exactly as before
+          ansible.builtin.template:
+            src: parts-db-web.container.j2
+            dest: "{{ quadlet_dir }}/{{ container_name }}.container"
+            mode: "0644"
+          vars:
+            use_u01: false
+
+        - name: Reload and start the app on the old folders
+          ansible.builtin.systemd:
+            scope: user
+            name: "{{ container_name }}.service"
+            state: started
+            daemon_reload: true
+
+        - name: Report the failure (the data on the old folders is untouched)
+          ansible.builtin.fail:
+            msg: "Relocation not completed; the app runs on the old folders again. Read the messages above. Nothing was deleted."
+
+    - name: Reload systemd and start the app on the new folders
+      ansible.builtin.systemd:
+        scope: user
+        name: "{{ container_name }}.service"
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait until the container reports healthy
+      ansible.builtin.command: "podman inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} {{ container_name }}"
+      register: health
+      until: health.stdout == 'healthy'
+      retries: 45
+      delay: 4
+      changed_when: false
+
+    - name: The health endpoint answers on the loopback port
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health/"
+        status_code: 200
+
+    - name: How much space the old folders hold (they are kept for rollback; you decide when to remove them)
+      ansible.builtin.command: "du -sh {{ legacy_root }}/data {{ legacy_root }}/media {{ legacy_root }}/backups"
+      register: old_sizes
+      changed_when: false
+      check_mode: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Relocated: the app now uses {{ storage_root }}/{data,media,backups}."
+          - "Pre-relocate backup: {{ (pre_backup.stdout | default('')).strip() }}"
+          - "KEPT FOR ROLLBACK, untouched, in the home folder: {{ old_sizes.stdout_lines }}"
+          - "Rollback: make rollback-storage. Nothing was deleted."

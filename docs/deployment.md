@@ -6,11 +6,12 @@ For concepts in plain language read `docs/podman-explained.md` first. The design
 - Server `cornil.fritz.box`, Linux user `homeapps` (key-only SSH, linger on). The Caddy gateway (`cornil-gateway` repository) serves `https://cornil.fritz.box/parts-db/` and strips the prefix.
 - The app is one container `parts-db-web` from the image `localhost/parts-db`, started by `~/.config/containers/systemd/parts-db-web.container` (a Quadlet file) through `homeapps`' own systemd.
 - It joins the Podman network `gateway` (so Caddy reaches it as `parts-db-web:8000`) and publishes `127.0.0.1:8891` for health probes and tunnels only.
-- Three mounted folders hold all state: `~/parts-db/data` (database), `~/parts-db/media` (PDF originals incl. `tmp_imports`), `~/parts-db/backups`. Also `~/parts-db/config/env` (secret key, 0600) and `~/parts-db/build`.
+- Three mounted folders hold all state, on the removable disk `/u01` (ADR 0003): `/u01/data/parts-db/data` (database), `/u01/data/parts-db/media` (PDF originals incl. `tmp_imports`), `/u01/data/parts-db/backups`. Image build files are in `/u01/apps/parts-db/build`. The secret key stays on the internal disk: `~/parts-db/config/env` (0600), together with the deploy record `~/parts-db/DEPLOYED`.
+- Before the move (and after a storage rollback) the same three folders are under `~/parts-db/`, the "legacy" layout. A one-word file `~/parts-db/config/storage_location` (`u01` or `legacy`) records which one is in use; `make deploy` refuses when it disagrees with `use_u01` in the variables.
 - Variables are in `infra/group_vars/partsdb_rootless.yml` (no secrets). The host name and user come from the git-ignored `infra/inventory.ini` (copy of `infra/inventory.ini.example`; use the alias for `homeapps` in the `[partsdb_rootless]` group).
 
 ## Preconditions (checked, never changed, by `make deploy`)
-Connected as `homeapps`; linger on; the user's systemd running; Podman installed; the file `~/.config/containers/systemd/gateway.network` exists (the gateway repository creates it). If one is missing the deploy stops with a plain message and changes nothing.
+Connected as `homeapps`; linger on; the user's systemd running; Podman installed; `/u01` is a real mount point (not the empty directory behind it); the three storage folders exist and belong to `homeapps`; the storage layout on the server matches `use_u01`; the file `~/.config/containers/systemd/gateway.network` exists (the gateway repository creates it). If one is missing the deploy stops with a plain message and changes nothing.
 
 ## First deployment
 ```
@@ -29,6 +30,20 @@ Looking at it before the gateway sends traffic: open a tunnel from your computer
 ssh -L 8891:127.0.0.1:8891 homeapps@<server>         # keep this window open: forwards your local port 8891 to the app
 # then open http://127.0.0.1:8891/parts-db/parts/    (the app also answers with the prefix on its own port)
 ```
+
+## Moving the data to /u01 (runbook, plain language)
+Why: the internal disk is small. The big USB disk is mounted at `/u01`. The app's data moves there; the secret key stays where it is.
+
+What protects you: the app's unit and the backup service refuse to start while `/u01` is not really mounted (`ExecStartPre=/usr/bin/mountpoint -q /u01`), so nothing can be written into the empty folder behind a missing disk. A failed start is retried every 10 seconds until the disk is back.
+
+Steps (phase PD2, run by the owner and Claude together):
+1. Before the move, the playbooks still need the old layout: add `EXTRA="-e use_u01=false"` to `make status`, `make backup-now`, `make fetch-backup` (and to `make deploy` if you deploy before moving).
+2. `make relocate-storage`. It checks everything first (disk mounted, old folders present, new folders empty) and changes nothing if a check fails. Then it stops the app, takes a verified backup (`pre-relocate`), **copies** data, media and backups with `cp -a` (never deleting), compares the file lists and the SHA-256 of every file, and shows you the result (file counts and sizes, never contents). Only when you type `SWITCH` does it point the app at the new folders, write the marker and start. If you do not confirm, or anything fails, the app is started again on the old folders.
+3. Afterwards the old folders stay in `~/parts-db/{data,media,backups}` untouched ("kept for rollback"). The report shows how much space they hold. You decide when to remove them; this repository never does.
+4. Undo: `make rollback-storage` (asks for `ROLLBACK`, takes a safety backup first, points the app at the old folders). Changes made after the move exist only on `/u01`; the safety backup holds them.
+5. After a rollback, `make deploy` needs `EXTRA="-e use_u01=false"` until you decide again.
+
+Why a marker file and two switches: `use_u01` in the variables says where the files should be, the marker says where they are. Deploys stop if they disagree, so a routine deploy can never silently point the app at an empty folder.
 
 ## Updating
 Commit, then `make deploy`. It takes a verified pre-deploy backup (when a database exists), builds the new image, runs `check --deploy` and migrations, swaps the image and restarts, waits for "healthy", keeps the newest 5 images (only `localhost/parts-db`). Data folders are never emptied or removed.

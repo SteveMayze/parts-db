@@ -14,6 +14,7 @@ PublishPort={{ listen_address }}:{{ app_port }}:8000
 # name ({{ container_name }}:8000, the port INSIDE the container). Quadlet makes this unit wait for gateway.network.
 Network={{ gateway_network }}
 # The only mounted folders: database (a folder, SQLite writes journal files beside it), PDF originals, backups.
+# They live on the removable disk {{ mount_guard_path }} (see ADR 0003); the secret env file below stays on the eMMC.
 Volume={{ data_root }}/data:/data
 Volume={{ data_root }}/media:/media
 Volume={{ data_root }}/backups:/backups
@@ -47,8 +48,18 @@ HealthStartPeriod=20s
 HealthOnFailure=restart
 
 [Service]
+{% if use_u01 | bool %}
+# The guard: never start (and so never create data) while {{ mount_guard_path }} is not a real mount point. A failed start is
+# retried every 10 s, without a limit, until the disk is there. RequiresMountsFor= only orders a start in a user unit,
+# it never blocks one, so it is not used (proven on the server, ADR 0006 of the gateway repository).
+ExecStartPre=/usr/bin/mountpoint -q {{ mount_guard_path }}
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=0
+{% else %}
 Restart=always
 RestartSec=5
+{% endif %}
 TimeoutStartSec=180
 
 [Install]
