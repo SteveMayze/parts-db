@@ -46,6 +46,19 @@ hsts_seconds: 0                      # keep 0 until the owner says otherwise
 allowed_hosts: "{{ ([public_host, 'localhost', '127.0.0.1'] + extra_allowed_hosts) | join(',') }}"
 csrf_trusted_origins: "{{ extra_csrf_origins | join(',') }}"
 
+# --- PostgreSQL (ADR 0003). Off by default: merging this changes nothing on the server. The platform repository
+# (cornil-gateway) owns the postgres container, the `db` network, the database and role, and the Podman secret
+# below; this repository only checks by NAME that they exist and never reads the password.
+use_postgres: false
+db_host: postgres                    # container name of the shared PostgreSQL on the db network
+db_port: 5432
+db_name: partsdb
+db_user: partsdb
+db_network: db.network               # Quadlet network file owned by the platform repository
+db_network_name: systemd-db          # the Podman network behind it, for one-off `podman run` (Quadlet default systemd-<name>)
+db_secret: partsdb-db-password       # Podman secret, created by the platform repository; delivered as DJANGO_DB_PASSWORD
+db_service: postgres.service         # Wants= and After= only (no Requires=: restarting PostgreSQL must not restart the app)
+
 memory_limit: 512m
 backup_time: "03:15:00"
 keep_images: 5
@@ -56,7 +69,9 @@ podman_run_flags: >-
   --userns={{ container_userns }} --user {{ app_uid }}:{{ app_uid }}
   --env-file {{ etc_dir }}/env
   -e DJANGO_DEBUG_FALSE=1
-  -e DJANGO_DB_PATH=/data/db.sqlite3 -e DJANGO_MEDIA_ROOT=/media -e DJANGO_BACKUP_DIR=/backups
+  {% if use_postgres | bool %}--network {{ db_network_name }} --secret {{ db_secret }},type=env,target=DJANGO_DB_PASSWORD
+  -e DJANGO_DB_HOST={{ db_host }} -e DJANGO_DB_PORT={{ db_port }} -e DJANGO_DB_NAME={{ db_name }} -e DJANGO_DB_USER={{ db_user }}
+  {% else %}-e DJANGO_DB_PATH=/data/db.sqlite3{% endif %} -e DJANGO_MEDIA_ROOT=/media -e DJANGO_BACKUP_DIR=/backups
   -e DJANGO_ALLOWED_HOSTS={{ allowed_hosts }}
   -e DJANGO_CSRF_TRUSTED_ORIGINS={{ csrf_trusted_origins }}
   -e DJANGO_HTTPS={{ '1' if use_https else '0' }}
@@ -64,3 +79,9 @@ podman_run_flags: >-
   -e DJANGO_BEHIND_TLS_PROXY={{ '1' if behind_tls_proxy else '0' }}
   -e DJANGO_HSTS_SECONDS={{ hsts_seconds }}
   -v {{ data_root }}/data:/data -v {{ data_root }}/media:/media -v {{ data_root }}/backups:/backups
+
+# The restore target for restore.yaml and rollback.yaml: SQLite files, or a new empty PostgreSQL database swapped in
+# (the live one is renamed aside, never dropped).
+restore_db_args: >-
+  {{ '--new-database auto --swap --confirm-swap SWAP' if use_postgres | bool else '--target-db /data/db.sqlite3' }}
+  --target-media /media --force

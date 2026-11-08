@@ -220,6 +220,22 @@ The reverse proxy (Caddy, TLS, routing) is **not** part of this repository; see 
 
 Paths are set by `DJANGO_DB_PATH` (database file), `DJANGO_MEDIA_ROOT` (PDF folder) and `DJANGO_BACKUP_DIR` (backups); without them the app uses `db.sqlite3` and `media/` in the project folder as before. `GET /health/` answers `ok` and is used by the container's health check.
 
+### Database settings (SQLite by default, PostgreSQL optional)
+
+Without `DJANGO_DB_HOST` the app uses SQLite exactly as before (development, tests, the current server). With it, the app uses PostgreSQL (driver `psycopg` 3). The password is only ever read from `DJANGO_DB_PASSWORD`; on the server that is a Podman secret, never a file or a log line.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DJANGO_DB_HOST` | unset = SQLite | host of the PostgreSQL server (`postgres` on the `db` network); setting it switches the engine |
+| `DJANGO_DB_PORT` | `5432` | port |
+| `DJANGO_DB_NAME` | `partsdb` | database |
+| `DJANGO_DB_USER` | `partsdb` | role (not a superuser) |
+| `DJANGO_DB_PASSWORD` | empty | password; from the Podman secret `partsdb-db-password` |
+| `DJANGO_DB_PATH` | `db.sqlite3` | SQLite file; ignored when `DJANGO_DB_HOST` is set |
+| `DJANGO_PG_BIN_DIR` | on `PATH` | folder with `pg_dump` / `pg_restore` (only needed outside the image) |
+
+Connections are kept for 60 seconds and checked before reuse (`CONN_MAX_AGE`, `CONN_HEALTH_CHECKS`); connecting gives up after 5 seconds. In `infra/group_vars/partsdb_rootless.yml` the switch is `use_postgres` (default `false`: a deploy changes nothing until it is set). `make test-pg` runs the whole test suite against a throw-away PostgreSQL 17 container on your machine (needs Podman; install the PostgreSQL 17 client tools, for example `brew install libpq`, and put them on the `PATH` or in `DJANGO_PG_BIN_DIR`, otherwise the backup tests are skipped). `python manage.py data_fingerprint` prints a row count and a content hash per table (never a value), identical on SQLite and PostgreSQL for the same data.
+
 Session and CSRF cookies are named `partsdb_sessionid` / `partsdb_csrftoken` and limited to the prefix path, so other apps on the same host do not log this one out. The app also accepts the prefix on its own port.
 
 ## Notes

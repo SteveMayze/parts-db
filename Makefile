@@ -13,7 +13,7 @@ BACKUP_ARG := $(if $(BACKUP),-e backup_file=$(BACKUP),)
 CONFIRM_ARG := $(if $(CONFIRM),-e confirm=$(CONFIRM),)
 MANAGE := bin/parts-db-manage
 
-.PHONY: setup test check ansible-setup syntax deploy status backup-now fetch-backup restore-drill restore rollback relocate-storage rollback-storage \
+.PHONY: setup test test-pg check ansible-setup syntax deploy status backup-now fetch-backup restore-drill restore rollback relocate-storage rollback-storage \
         createsuperuser changepassword deploy-docker deploy-podman
 
 setup:
@@ -21,6 +21,9 @@ setup:
 
 test:
 	$(PYTHON) manage.py test
+
+test-pg:               ## the whole suite against a throw-away PostgreSQL 17 container (needs podman; client tools 17 for the backup tests)
+	PYTHON=$(PYTHON) sh infra/test-pg.sh
 
 check:
 	$(PYTHON) manage.py check

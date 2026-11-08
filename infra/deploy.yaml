@@ -111,6 +111,32 @@
         label: "{{ item.item }}"
       when: use_u01 | bool
 
+    # PostgreSQL (use_postgres: true). Everything below only LOOKS: by name, never at the password's value.
+    - name: PostgreSQL mode - look for the db network file (created by the platform repository, same Quadlet folder)
+      ansible.builtin.stat:
+        path: "{{ quadlet_dir }}/{{ db_network }}"
+      register: db_network_file
+      when: use_postgres | bool
+
+    - name: PostgreSQL mode - does the Podman secret exist? (existence only, the value is never read or shown)
+      ansible.builtin.command: "podman secret exists {{ db_secret }}"
+      register: db_secret_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: use_postgres | bool
+
+    - name: PostgreSQL mode - the db network and the secret must exist before this app can use them (nothing was changed)
+      ansible.builtin.assert:
+        that:
+          - db_network_file.stat.exists
+          - db_secret_check.rc == 0
+        fail_msg: >-
+          use_postgres is true, but {{ quadlet_dir }}/{{ db_network }} or the Podman secret '{{ db_secret }}' is missing.
+          Both are created by the platform repository (cornil-gateway): run its PostgreSQL phase first. Nothing was
+          changed here. See docs/deployment.md.
+      when: use_postgres | bool
+
     - name: Check that Podman is installed (nothing is installed or upgraded by this playbook)
       ansible.builtin.command: podman --version
       changed_when: false
@@ -154,7 +180,7 @@
       failed_when: false
       changed_when: false
 
-    - name: Is there a database already?
+    - name: Is there a SQLite database already? (with PostgreSQL the backup step below decides by looking at the database)
       ansible.builtin.stat:
         path: "{{ data_root }}/data/db.sqlite3"
       register: db_file
@@ -224,9 +250,9 @@
     - name: Back up before changing anything (database and PDFs together, verified; uses the newly built image)
       ansible.builtin.command: >-
         podman run {{ podman_run_flags }} {{ image_new }}
-        python manage.py backup_db --label pre-deploy
+        python manage.py backup_db --label pre-deploy{{ ' --skip-if-empty' if use_postgres | bool else '' }}
       register: pre_backup
-      when: db_file.stat.exists
+      when: use_postgres | bool or db_file.stat.exists
       changed_when: "'BACKUP_CREATED' in pre_backup.stdout"
 
     - name: Keep the live image as 'previous' (for rollback) unless it is the same image

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import io
 import re
 import csv
-import unicodedata
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime, timedelta
@@ -22,6 +21,7 @@ from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.generic import CreateView, DeleteView, DetailView, ListView, UpdateView
 
+from .ordering import sort_by_text, sort_texts, text_sort_key
 from parsers import detect_parser_from_text, get_parser_for_supplier
 from parsers.describe import suggest_part_fields
 from parsers.formats import canonicalise_match_value, normalise_unicode_text
@@ -71,7 +71,7 @@ def _save_temp_pdf(uploaded_file):
 
 
 def _project_choices_with_current(current_project=None):
-    active_projects = list(Project.objects.filter(active=True).order_by("name"))
+    active_projects = sort_by_text(Project.objects.filter(active=True))
     if current_project and current_project not in active_projects:
         active_projects.append(current_project)
     return active_projects
@@ -90,19 +90,7 @@ def _canonicalise_search(value):
     return canonicalise_match_value(value)
 
 
-def _sort_text_key(value):
-    text = unicodedata.normalize("NFC", str(value or "")).casefold().replace("µ", "u").replace("μ", "u")
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-    parts = []
-    for chunk in re.split(r"(\d+)", text):
-        if not chunk:
-            continue
-        if chunk.isdigit():
-            parts.append((0, int(chunk)))
-        else:
-            parts.append((1, chunk))
-    return tuple(parts)
+_sort_text_key = text_sort_key
 
 
 def _empty_last_compare(left, right):
@@ -662,6 +650,9 @@ class PartListView(ListView):
         sort_key, direction = _parse_sort_params(self.request, self.allowed_sort_keys)
         if sort_key:
             queryset = sorted(queryset, key=cmp_to_key(lambda left, right: _compare_parts(left, right, sort_key=sort_key, direction=direction)))
+        else:
+            # Default order, explicit and the same on every database engine (the Meta ordering is locale dependent).
+            queryset = sorted(queryset, key=_part_secondary_sort_tuple)
         return queryset
 
     def get_context_data(self, **kwargs):
@@ -670,15 +661,15 @@ class PartListView(ListView):
         context["current_part_type"] = self.request.GET.get("part_type", "").strip()
         context["current_packaging"] = self.request.GET.get("packaging", "").strip()
         context["current_part_subtype"] = self.request.GET.get("part_subtype", "").strip()
-        context["part_types"] = (
-            Part.objects.exclude(part_type="").order_by("part_type").values_list("part_type", flat=True).distinct()
+        context["part_types"] = sort_texts(
+            Part.objects.exclude(part_type="").values_list("part_type", flat=True).distinct()
         )
         subtype_qs = Part.objects.exclude(part_subtype="")
         if context["current_part_type"]:
             subtype_qs = subtype_qs.filter(part_type__iexact=context["current_part_type"])
-        context["part_subtypes"] = subtype_qs.order_by("part_subtype").values_list("part_subtype", flat=True).distinct()
-        context["packaging_options"] = (
-            Part.objects.exclude(packaging="").order_by("packaging").values_list("packaging", flat=True).distinct()
+        context["part_subtypes"] = sort_texts(subtype_qs.values_list("part_subtype", flat=True).distinct())
+        context["packaging_options"] = sort_texts(
+            Part.objects.exclude(packaging="").values_list("packaging", flat=True).distinct()
         )
 
         current_sort, current_dir = _parse_sort_params(self.request, self.allowed_sort_keys)
@@ -861,17 +852,14 @@ class ProjectListView(ListView):
             queryset = queryset.filter(client__iexact=client)
         if active in {"yes", "no"}:
             queryset = queryset.filter(active=(active == "yes"))
-        return queryset.order_by("name")
+        return sort_by_text(queryset)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["current_client"] = self.request.GET.get("client", "").strip()
         context["current_active"] = self.request.GET.get("active", "").strip()
-        context["clients"] = (
-            Project.objects.exclude(client="")
-            .order_by("client")
-            .values_list("client", flat=True)
-            .distinct()
+        context["clients"] = sort_texts(
+            Project.objects.exclude(client="").values_list("client", flat=True).distinct()
         )
         return context
 
@@ -884,11 +872,8 @@ class ProjectCreateView(CreateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["client_suggestions"] = (
-            Project.objects.exclude(client="")
-            .order_by("client")
-            .values_list("client", flat=True)
-            .distinct()
+        context["client_suggestions"] = sort_texts(
+            Project.objects.exclude(client="").values_list("client", flat=True).distinct()
         )
         return context
 
@@ -909,11 +894,8 @@ class ProjectUpdateView(UpdateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["client_suggestions"] = (
-            Project.objects.exclude(client="")
-            .order_by("client")
-            .values_list("client", flat=True)
-            .distinct()
+        context["client_suggestions"] = sort_texts(
+            Project.objects.exclude(client="").values_list("client", flat=True).distinct()
         )
         return context
 
@@ -1022,8 +1004,8 @@ class PurchaseDocumentListView(ListView):
         context["sort_headers"] = {column["key"]: column for column in columns}
         context["current_sort"] = current_sort
         context["current_dir"] = current_dir
-        context["suppliers"] = Supplier.objects.order_by("name")
-        context["projects"] = Project.objects.filter(active=True).order_by("name")
+        context["suppliers"] = sort_by_text(Supplier.objects.all())
+        context["projects"] = sort_by_text(Project.objects.filter(active=True))
         context["document_types"] = PurchaseDocument.DocumentType.choices
         context["years"] = (
             PurchaseDocument.objects.exclude(document_date__isnull=True)
@@ -1050,7 +1032,7 @@ class PurchaseDocumentDetailView(DetailView):
             }
             for line in document.lines.all()
         ]
-        context["bulk_projects"] = Project.objects.filter(active=True).order_by("name")
+        context["bulk_projects"] = sort_by_text(Project.objects.filter(active=True))
         return context
 
     def post(self, request, *args, **kwargs):
@@ -1178,12 +1160,9 @@ def project_documents(request):
         request,
         "parts/project_documents.html",
         {
-            "projects": Project.objects.order_by("name"),
-            "clients": (
-                Project.objects.exclude(client="")
-                .order_by("client")
-                .values_list("client", flat=True)
-                .distinct()
+            "projects": sort_by_text(Project.objects.all()),
+            "clients": sort_texts(
+                Project.objects.exclude(client="").values_list("client", flat=True).distinct()
             ),
             "selected_project": selected_project,
             "selected_client": selected_client,
@@ -1510,7 +1489,7 @@ def _preview_context(payload):
             (QUANTITY_MODE_ADD, "Mengen zum Bestand addieren"),
             (QUANTITY_MODE_KEEP, "Bestand nicht verändern"),
         ],
-        "active_projects": Project.objects.filter(active=True).order_by("name"),
+        "active_projects": sort_by_text(Project.objects.filter(active=True)),
         "project_new_link": f"{reverse('parts:project_add')}?next={reverse('parts:invoice_preview')}",
         "known_part_types": sorted(existing["part_type"], key=str.casefold),
         "known_packagings": sorted(existing["packaging"], key=str.casefold),

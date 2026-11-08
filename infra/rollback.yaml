@@ -34,8 +34,8 @@
     - name: Safety backup of the current state first
       ansible.builtin.command: >-
         podman run {{ podman_run_flags }} {{ image_repo }}:current
-        python manage.py backup_db --label pre-rollback
-      when: db_file.stat.exists
+        python manage.py backup_db --label pre-rollback{{ ' --skip-if-empty' if use_postgres | bool else '' }}
+      when: use_postgres | bool or db_file.stat.exists
       changed_when: true
 
     - name: Keep the image being rolled back under its own tag
@@ -57,7 +57,7 @@
       ansible.builtin.command: >-
         podman run {{ podman_run_flags }} {{ image_repo }}:current
         python manage.py restore_backup {{ restore_backup | quote }}
-        --target-db /data/db.sqlite3 --target-media /media --force
+        {{ restore_db_args }}
       when: restore_backup | length > 0
       changed_when: true
 

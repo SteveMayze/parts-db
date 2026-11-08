@@ -39,7 +39,7 @@ TEMPLATES = ("parts-db-web.container.j2", "parts-db-backup.service.j2", "parts-d
 
 
 @functools.lru_cache(maxsize=None)
-def _render_all(use_u01=True):
+def _render_all(use_u01=True, use_postgres=False):
     """Render every template once with Ansible's own engine, the real group_vars and a fake host."""
     out = Path(tempfile.mkdtemp())
     tasks = "".join(
@@ -52,13 +52,13 @@ def _render_all(use_u01=True):
         f"  tasks:\n{tasks}"
     )
     ansible = ROOT / ".venv" / "bin" / "ansible-playbook"
-    cmd = [str(ansible) if ansible.exists() else "ansible-playbook", "-i", "localhost,", "-c", "local", "-e", f"use_u01={str(use_u01).lower()}", str(play)]
+    cmd = [str(ansible) if ansible.exists() else "ansible-playbook", "-i", "localhost,", "-c", "local", "-e", f"use_u01={str(use_u01).lower()}", "-e", f"use_postgres={str(use_postgres).lower()}", str(play)]
     subprocess.run(cmd, check=True, capture_output=True)
     return {t: (out / t).read_text() for t in TEMPLATES}
 
 
-def rendered(template, use_u01=True):
-    return _render_all(use_u01)[template]
+def rendered(template, use_u01=True, use_postgres=False):
+    return _render_all(use_u01, use_postgres)[template]
 
 
 class DockerfileTests(SimpleTestCase):
@@ -281,8 +281,8 @@ class DataSafetyTests(SimpleTestCase):
     def test_restore_needs_explicit_confirmation_and_takes_a_safety_backup_first(self):
         text = read("infra/restore.yaml")
         self.assertIn("confirm == 'RESTORE'", text)
-        self.assertLess(text.index("--label pre-restore"), text.index("--target-db"))
-        self.assertIn("--force", text)                         # moves existing data aside, never deletes it
+        self.assertLess(text.index("--label pre-restore"), text.index("{{ restore_db_args }}"))
+        self.assertIn("--force", group_vars()["restore_db_args"])       # moves existing data aside, never deletes it
 
     def test_deploy_backs_up_before_migrating_and_refuses_a_foreign_data_root(self):
         text = read("infra/deploy.yaml")

@@ -140,13 +140,40 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        # A folder is mounted in production (SQLite writes journal files beside the database).
-        'NAME': os.environ.get("DJANGO_DB_PATH") or BASE_DIR / 'db.sqlite3',
+def _database():
+    """SQLite unless DJANGO_DB_HOST is set (settings contract v1, ADR 0003); then PostgreSQL.
+
+    The password only ever comes from DJANGO_DB_PASSWORD (a Podman secret in production). It is not logged and not
+    part of any message: Django never prints the DATABASES settings, and errors from the driver do not contain it.
+    """
+    host = os.environ.get("DJANGO_DB_HOST", "").strip()
+    if not host:
+        return {
+            'ENGINE': 'django.db.backends.sqlite3',
+            # A folder is mounted in production (SQLite writes journal files beside the database).
+            'NAME': os.environ.get("DJANGO_DB_PATH") or BASE_DIR / 'db.sqlite3',
+        }
+    return {
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': host,
+        'PORT': os.environ.get("DJANGO_DB_PORT", "").strip() or "5432",
+        'NAME': os.environ.get("DJANGO_DB_NAME", "").strip() or "partsdb",
+        'USER': os.environ.get("DJANGO_DB_USER", "").strip() or "partsdb",
+        'PASSWORD': os.environ.get("DJANGO_DB_PASSWORD", ""),
+        # Reuse a connection for a minute (a single-user app), but check it is alive before use, so a restart of
+        # PostgreSQL costs one retried request, not an error page. The server is on the same host: fail fast.
+        'CONN_MAX_AGE': 60,
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {'connect_timeout': 5},
     }
-}
+
+
+DATABASES = {'default': _database()}
+USING_POSTGRES = DATABASES['default']['ENGINE'].endswith('postgresql')
+# Shown in backup manifests (set from the git commit at image build time).
+APP_VERSION = os.environ.get("DJANGO_APP_COMMIT", "").strip() or "dev"
+# Folder of the PostgreSQL client tools (pg_dump, pg_restore) when they are not on the PATH.
+PG_BIN_DIR = os.environ.get("DJANGO_PG_BIN_DIR", "").strip()
 
 
 # Password validation
