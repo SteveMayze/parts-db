@@ -55,7 +55,7 @@ db_port: 5432
 db_name: partsdb
 db_user: partsdb
 db_network: db.network               # Quadlet network file owned by the platform repository
-db_network_name: systemd-db          # the Podman network behind it, for one-off `podman run` (Quadlet default systemd-<name>)
+db_network_name: db                  # the Podman network behind it, for one-off `podman run` (the platform's db.network sets NetworkName=db)
 db_secret: partsdb-db-password       # Podman secret, created by the platform repository; delivered as DJANGO_DB_PASSWORD
 db_service: postgres.service         # Wants= and After= only (no Requires=: restarting PostgreSQL must not restart the app)
 

@@ -109,7 +109,7 @@ class PostgresUnitTests(SimpleTestCase):
         for name in ("parts-db-backup.service.j2", "manage.sh.j2"):
             text = rendered(name, use_postgres=True)
             self.assertIn("--secret partsdb-db-password,type=env,target=DJANGO_DB_PASSWORD", text, name)
-            self.assertIn("--network systemd-db", text, name)
+            self.assertIn("--network db ", text, name)
             self.assertIn("-e DJANGO_DB_HOST=postgres", text, name)
             self.assertNotIn("DJANGO_DB_PATH", text, name)
             self.assertNotIn("not-a-real-password", text)
