@@ -3,6 +3,12 @@
 # systemd (systemctl --user). Quadlet adds the user-level "wait for network" dependency by itself.
 [Unit]
 Description=Parts DB web app (rootless Podman Quadlet)
+{% if use_postgres | bool %}
+# Starts after PostgreSQL when both are started together. Wants=, not Requires=: a restart of PostgreSQL must not
+# restart the app (Django reconnects on its own).
+Wants={{ db_service }}
+After={{ db_service }}
+{% endif %}
 
 [Container]
 Image={{ image_repo }}:current
@@ -13,6 +19,14 @@ PublishPort={{ listen_address }}:{{ app_port }}:8000
 # Joins the gateway network (created by the separate gateway repository), so the reverse proxy reaches this container by
 # name ({{ container_name }}:8000, the port INSIDE the container). Quadlet makes this unit wait for gateway.network.
 Network={{ gateway_network }}
+{% if use_postgres | bool %}
+# Also joins the db network (owned by the platform repository) to reach PostgreSQL as host {{ db_host }}. The database is
+# not published on the host; only containers on this network can reach it.
+Network={{ db_network }}
+# The database password: a Podman secret created by the platform repository, injected as an environment variable.
+# Never in this file, in the env file or in git.
+Secret={{ db_secret }},type=env,target=DJANGO_DB_PASSWORD
+{% endif %}
 # The only mounted folders: database (a folder, SQLite writes journal files beside it), PDF originals, backups.
 # They live on the removable disk {{ mount_guard_path }} (see ADR 0003); the secret env file below stays on the eMMC.
 Volume={{ data_root }}/data:/data
@@ -25,7 +39,14 @@ Group={{ app_uid }}
 # SECRET_KEY lives only in this 0600 file owned by the service user, never in this unit file.
 EnvironmentFile={{ etc_dir }}/env
 Environment=DJANGO_DEBUG_FALSE=1
+{% if use_postgres | bool %}
+Environment=DJANGO_DB_HOST={{ db_host }}
+Environment=DJANGO_DB_PORT={{ db_port }}
+Environment=DJANGO_DB_NAME={{ db_name }}
+Environment=DJANGO_DB_USER={{ db_user }}
+{% else %}
 Environment=DJANGO_DB_PATH=/data/db.sqlite3
+{% endif %}
 Environment=DJANGO_MEDIA_ROOT=/media
 Environment=DJANGO_BACKUP_DIR=/backups
 Environment=DJANGO_ALLOWED_HOSTS={{ allowed_hosts }}

@@ -51,12 +51,18 @@ Commit, then `make deploy`. It takes a verified pre-deploy backup (when a databa
 ## Backups
 - Daily 03:15 (plus up to 10 minutes random delay; missed runs are made up after a reboot): `manage.py backup_db --prune` as a systemd *user* timer. Check with `make status` or `systemctl --user list-timers`.
 - Now: `make backup-now`. One archive `backup-YYYYMMDD-HHMMSS[-label].tar.gz` holds the database (SQLite online backup), every media file, and a manifest with SHA-256 checksums, the integrity-check result and row counts. It is re-opened and verified before success is reported. Labels used: `manual`, `pre-deploy`, `pre-rollback`, `pre-restore`.
+- **On PostgreSQL** (`use_postgres: true`) the archive has the same name, retention and verification, but holds `db.dump` (a `pg_dump -Fc`, taken from one consistent snapshot while the app keeps running) instead of `db.sqlite3`. The manifest also names the engine and the app version (git commit) and lists the row counts per table, counted through the Django ORM in the same snapshot as the dump. After writing, the archive is opened again: checksums, `pg_restore --list`. The platform's nightly dump of `partsdb` is a second, independent layer; it does not contain the PDFs, so it cannot replace this archive.
 - Retention: newest per day for 14 days, newest per month for 12 months, labelled ones for 30 days, and always the newest backup.
 - Off-server copy: `make fetch-backup` (or `BACKUP=name`) puts a verified copy in `local/backups/` (git-ignored, mode 0600). Keep it out of synced or shared folders: it contains your data.
 
 ## Restore
 1. `make restore-drill` (optionally `BACKUP=name`): restores into a throw-away place and checks the result. Expected ending `DRILL_OK`. Live data is not touched.
 2. `make restore BACKUP=backup-....tar.gz`: verifies the archive, asks you to type `RESTORE`, stops the app, takes a `pre-restore` backup, moves the existing database and media aside (database as `db.sqlite3.before-restore-<time>`, media files into `media/.before-restore-<time>/`; nothing is deleted), restores, restarts and waits for "healthy". Refuses to run without the confirmation.
+
+### Restore on PostgreSQL
+- `make restore-drill`: the app restores the archive into a scratch database that it creates itself (`partsdb_drill_<time>`), compares every table's row count with the manifest, and drops that scratch database again. It only ever drops a database it created in that run. Live data is not touched. Expected ending `DRILL_RESTORED ... scratch_database_dropped=yes`.
+- `make restore BACKUP=...`: after you type `RESTORE` and a safety backup, the archive is restored into a **new, empty** database (`<name>_restore_<time>`), the row counts are compared, the PDFs are put back (existing ones moved aside), and only then, because the command line carries `--confirm-swap SWAP`, the live database is **renamed** to `<name>_before_restore_<time>` and the restored one takes its name. The old database is never dropped; the owner removes it later if wished. Renaming needs the app stopped (the playbook stops it) and a role with `CREATEDB`; without that right the restore stops before swapping and says so, and the restored copy stays available under its new name.
+- Order of the PostgreSQL phase: the platform creates the role, the database, the `db` network and the secret; this repository only checks that the network file and the secret *exist* (by name) before `make deploy` changes anything.
 
 ## Rollback
 `make rollback` puts the previous image back (data untouched). If a failed release changed the database in a way the old code cannot read: `make rollback BACKUP=backup-<time>-pre-deploy.tar.gz`. Before the gateway switch, rolling back to the old rootful instance is simply not switching the gateway upstream: it is still running.
@@ -120,6 +126,9 @@ Reload anything you still want through the imports (see "Reloading data after an
 
 ## Troubleshooting
 See the table in `docs/podman-explained.md`, section 7.
+
+## What is and is not verified (PostgreSQL support, phase PD3)
+Verified in the build session: the whole suite passes on SQLite and on PostgreSQL 16 (server and client tools 16; the image uses 17); the settings contract, the rendered unit with `use_postgres` on and off, real `pg_dump`/`pg_restore` backup, restore, swap and drill against a local server, identical fingerprints on both engines. Not verified here: the image build with `postgresql-client-17` (the build itself fails loudly if the tools are missing or older than 17), the suite against PostgreSQL 17 (`make test-pg`), anything on the server.
 
 ## What is and is not verified
 Verified (phase R1): the complete test suite passes with the prefix empty and set, including a test that an uploaded PDF lands in the configured media folder and a database row points to it, backup/restore tests, and artifact tests (sudo-free, hardening, mounts, isolation from the Tax app, no Caddy code); `make syntax`; a `--check` dry run against the real server for connection and preconditions; the templates rendered with Ansible's engine; the real Quadlet generator in dry-run mode accepted the generated unit (as `homeapps`, in a throw-away folder, nothing installed).

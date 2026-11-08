@@ -23,7 +23,18 @@
       ansible.builtin.set_fact:
         drill_file: "{{ backup_file | default((found.files | sort(attribute='mtime') | last).path | basename) }}"
 
+    # PostgreSQL: the app itself verifies the archive, restores it into a scratch database that it creates, compares the
+    # row counts and drops that scratch database again (only ever one it created). Live data and PDFs are not touched.
+    - name: PostgreSQL - verify, restore into a scratch database, compare the row counts, drop the scratch database
+      ansible.builtin.command: >-
+        podman run {{ podman_run_flags }} {{ image_repo }}:current
+        python manage.py restore_backup {{ drill_file | quote }} --drill
+      register: pg_drill
+      changed_when: false
+      when: use_postgres | bool
+
     - name: Verify and restore into a temporary directory, then check the restored database
+      when: not (use_postgres | bool)
       ansible.builtin.command:
         argv:
           - podman
@@ -62,8 +73,8 @@
 
     - name: Result
       ansible.builtin.debug:
-        msg: "{{ drill.stdout_lines }}"
+        msg: "{{ (pg_drill.stdout_lines if use_postgres | bool else drill.stdout_lines) }}"
 
-    - name: The drill must end with DRILL_OK
+    - name: The drill must end with DRILL_OK (SQLite) or DRILL_RESTORED (PostgreSQL)
       ansible.builtin.assert:
-        that: "'DRILL_OK' in drill.stdout"
+        that: "('DRILL_RESTORED' in pg_drill.stdout) if use_postgres | bool else ('DRILL_OK' in drill.stdout)"

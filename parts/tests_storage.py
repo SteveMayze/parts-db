@@ -196,6 +196,7 @@ class BackupTests(SimpleTestCase):
         (self.backups / "backup-20200101-031500.tar.gz").write_bytes(b"x")
         self.assertEqual(backup.prune(self.backups, now=datetime.datetime(2026, 6, 15, tzinfo=datetime.timezone.utc)), [])
 
+    @override_settings(USING_POSTGRES=False)          # this test is about the SQLite file path (also when the suite runs on PostgreSQL)
     def test_commands_create_verify_and_restore(self):
         out = StringIO()
         call_command("backup_db", "--db", str(self.db), "--media", str(self.media), "--backup-dir", str(self.backups), "--label", "pre-deploy", "--prune", stdout=out)
