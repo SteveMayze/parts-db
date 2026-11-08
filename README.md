@@ -187,7 +187,7 @@ The app runs as a **rootless** Podman container of the ordinary Linux user `home
 
 Everything you import is stored in two folders on the host that are mounted into the container, so a restart, redeploy or image change never loses it:
 
-- `/u01/data/parts-db/data`: the SQLite database (on the removable disk; `/home/homeapps/parts-db/data` before the move, see `docs/deployment.md`)
+- The database lives in the shared PostgreSQL container (database `partsdb`) since 2026-11-08; the old SQLite file is kept in `/u01/data/parts-db/legacy-sqlite/` until the owner removes it (see `docs/deployment.md`)
 - `/u01/data/parts-db/media`: the uploaded PDF originals
 
 A daily backup (database and PDFs together, verified) is taken by a systemd user timer.
