@@ -67,6 +67,14 @@ Commit, then `make deploy`. It takes a verified pre-deploy backup (when a databa
 ## Rollback
 `make rollback` puts the previous image back (data untouched). If a failed release changed the database in a way the old code cannot read: `make rollback BACKUP=backup-<time>-pre-deploy.tar.gz`. Before the gateway switch, rolling back to the old rootful instance is simply not switching the gateway upstream: it is still running.
 
+## Moved to PostgreSQL (2026-11-08)
+- The app runs on the shared PostgreSQL (`use_postgres=true` is a host variable in the ignored `infra/inventory.ini`; not in `all.yml`, where the group file would override it).
+- The old SQLite file is at `/u01/data/parts-db/legacy-sqlite/db.sqlite3`, untouched since the final backup. It may be removed by the owner after **2026-11-22** (14 days): `rm /u01/data/parts-db/legacy-sqlite/db.sqlite3` as `homeapps`. Not run by anyone else.
+- Rollback to SQLite (rehearsed with `--check` only): move the file back with `mv /u01/data/parts-db/legacy-sqlite/db.sqlite3 /u01/data/parts-db/data/`, set `use_postgres=false`, `make deploy`. Data written after the cutover stays only in PostgreSQL.
+- The one-time move used `migrate`, `dump_exact`, `loaddata`, a sequence reset and `data_fingerprint` on both sides. Do not use plain `dumpdata`: it cuts timestamps to milliseconds.
+- `make restore-drill` and the swap of `make restore` need `CREATEDB`, which the `partsdb` role deliberately lacks. Use the platform's restore tools (cornil-gateway).
+- `make fetch-backup` verifies PostgreSQL archives locally and needs `pg_restore` on the Mac (`brew install libpq`).
+
 ## Reloading data after an empty start
 The new instance is empty. From the running old app (do not touch the old instance otherwise) export your parts as CSV (the link **Alle Bauteile exportieren** on the parts list), then in the new instance:
 1. Log in (`make createsuperuser` first time).

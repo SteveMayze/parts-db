@@ -46,6 +46,15 @@ Decision: no data migration. The PDF folder was never mounted in the rootful con
 - [x] R2: owner stopped the rootful unit and renamed its unit file; reboot test with nobody logged in passed (container came back healthy, data intact, gateway 200)
 - [ ] R3: loopback-only already default; close port 8888, `DJANGO_HTTPS=1`, drop the CSRF origin for `:8888`, remove the rootful and Docker playbooks and Makefile targets
 
+### U01 / PostgreSQL (2026-11-08)
+- [x] PD1/PD2: storage relocated to `/u01/data/parts-db`, comparison identical, old home-folder copies kept for rollback (owner removes them)
+- [x] PD3: PostgreSQL support in the app (settings contract, backups, fingerprint, ordering, `make test-pg`)
+- [x] PD4: cutover to PostgreSQL; fingerprints identical before and after; PostgreSQL backup archives written; owner's checks passed; SQLite moved to `legacy-sqlite/`
+- [ ] Reboot test after the cutover (owner)
+- [ ] Restore drill on PostgreSQL via the platform's U3 tools (the app role has no CREATEDB, ADR 0003 decision 15)
+- [ ] Confirm the platform's nightly dump of `partsdb` appears under `/u01/data/backups/postgres/partsdb/`
+- [ ] Owner may remove `legacy-sqlite/db.sqlite3` after 2026-11-22
+
 ## Next increments
 
 ### Phase 1 — Core user behavior (now)
